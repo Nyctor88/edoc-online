@@ -45,18 +45,6 @@ function encodeSD(rt, base, offset) {
   return encodeIType(63, base, rt, offset);
 }
 
-// --- REGISTER MANAGER (Matches C Logic) ---
-let tempRegCount = 0;
-
-function resetTemps() {
-  tempRegCount = 0;
-}
-
-function allocateTemp() {
-  tempRegCount++;
-  return tempRegCount; // Returns 1, 2, 3... (Matches R1, R2, R3...)
-}
-
 // --- EXPRESSION PARSER (Shunting-Yard) ---
 function tokenize(expr) {
   const regex = /([0-9]+)|([a-zA-Z_][a-zA-Z0-9_]*)|([\+\-\*\/])|(\()|(\))/g;
@@ -105,9 +93,8 @@ function shuntingYard(tokens) {
 }
 
 // --- ASM GENERATOR ---
-// Now returns { asm: string, reg: number } instead of forcing a move to R4
-function generateComplexASM(expr, machineCodeOutput) {
-  // Unary Minus Hack (same as before)
+function generateComplexASM(expr, machineCodeOutput, getNextReg) {
+  // Unary Minus Hack
   expr = expr.replace(/^-\s*([a-zA-Z0-9]+)/, "0 - $1");
   expr = expr.replace(/\(-\s*([a-zA-Z0-9]+)/g, "(0 - $1");
 
@@ -121,14 +108,14 @@ function generateComplexASM(expr, machineCodeOutput) {
     if (!isNaN(parseInt(token))) {
       // Immediate
       let val = parseInt(token);
-      let reg = allocateTemp(); // Get next sequential register
+      let reg = getNextReg();
       asm += `DADDIU R${reg}, R0, #${val}\n`;
       let b = encodeIType(25, 0, reg, val);
       machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       regStack.push(reg);
     } else if (/^[a-zA-Z_]/.test(token)) {
       // Variable
-      let reg = allocateTemp();
+      let reg = getNextReg();
       asm += `LD R${reg}, ${token}(R0)\n`;
       let b = encodeLD(reg, 0, 0);
       machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
@@ -137,7 +124,7 @@ function generateComplexASM(expr, machineCodeOutput) {
       // Operator
       let rRight = regStack.pop();
       let rLeft = regStack.pop();
-      let rRes = allocateTemp(); // New temp for result
+      let rRes = getNextReg();
 
       if (token === "+") {
         asm += `DADDU R${rRes}, R${rLeft}, R${rRight}\n`;
@@ -177,7 +164,20 @@ function generateEduMIPS(sourceCode) {
   const lines = sourceCode.split("\n");
   let dataSection = ".data\n";
   let codeSection = ".code\n";
+  // Version Marker
+  codeSection += "; --- EDOC COMPILER V3 (Clean Registers) ---\n";
+
   let machineCodeOutput = { code: "" };
+
+  // Register Manager (Scoped locally to this function call)
+  let tempRegCount = 0;
+  const getNextReg = () => {
+    tempRegCount++;
+    return tempRegCount; // Returns 1, 2, 3...
+  };
+  const resetTemps = () => {
+    tempRegCount = 0;
+  };
 
   lines.forEach((line) => {
     line = line.trim();
@@ -192,7 +192,7 @@ function generateEduMIPS(sourceCode) {
 
     // 1. DECLARATIONS
     if (line.startsWith("var.") || line.startsWith("const.")) {
-      resetTemps(); // Reset register counter for new statement
+      resetTemps();
       const parts = line.replace(/,/g, " ").replace(/=/g, " ").split(/\s+/);
       let currentVar = null;
       for (let i = 2; i < parts.length; i++) {
@@ -212,7 +212,7 @@ function generateEduMIPS(sourceCode) {
           let val = parseInt(token);
           if (isNaN(val)) val = 0;
 
-          let reg = allocateTemp(); // R1
+          let reg = getNextReg(); // R1
           codeSection += `DADDIU R${reg}, R0, #${val}\n`;
           let bin1 = encodeIType(25, 0, reg, val);
           machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
@@ -228,17 +228,17 @@ function generateEduMIPS(sourceCode) {
 
     // 2. ASSIGNMENTS
     else if (line.includes("=") && !line.startsWith("dsply")) {
-      resetTemps(); // Reset register counter
+      resetTemps();
       const sides = line.split("=");
       const target = sides[0].trim();
       const expr = sides[1].trim();
 
       if (/[+\-*/]/.test(expr)) {
         // Complex Math
-        let result = generateComplexASM(expr, machineCodeOutput);
+        let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
         codeSection += result.asm;
 
-        // DIRECT STORE: Use the result register directly (Removes extra move)
+        // DIRECT STORE (No extra moves)
         codeSection += `SD R${result.reg}, ${target}(R0)\n`;
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
@@ -246,7 +246,7 @@ function generateEduMIPS(sourceCode) {
         // Simple Assignment
         let val = parseInt(expr);
         if (!isNaN(val)) {
-          let reg = allocateTemp();
+          let reg = getNextReg();
           codeSection += `DADDIU R${reg}, R0, #${val}\n`;
           let b = encodeIType(25, 0, reg, val);
           machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
@@ -260,36 +260,19 @@ function generateEduMIPS(sourceCode) {
 
     // 3. PRINTING
     else if (line.startsWith("dsply@")) {
-      resetTemps(); // Reset register counter
+      resetTemps();
       let content = line.match(/\[(.*?)\]/)[1].trim();
 
       if (/[+\-*/]/.test(content)) {
-        let result = generateComplexASM(content, machineCodeOutput);
+        let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
-
-        // If the result isn't in R4 (Arg register), move it there
-        if (result.reg !== 4) {
-          codeSection += `DADDU R4, R${result.reg}, R0\n`;
-          let b = encodeRType(0, result.reg, 0, 4, 0, 45);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-        }
+        // Result is in result.reg. We leave it there.
       } else {
         // Single Variable
-        codeSection += `LD R4, ${content}(R0)\n`;
+        codeSection += `LD R4, ${content}(R0)\n`; // Using R4 as convention for single vars
         let b = encodeLD(4, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
-
-      // Syscall Print logic (Optional: can remove if you want clean code)
-      /*
-            codeSection += `DADDIU R2, R0, #1\n`;
-            let b1 = encodeIType(25, 0, 2, 1); 
-            machineCodeOutput.code += `${b1} (${binToHex(b1)})\n`;
-
-            codeSection += `SYSCALL\n`;
-            let b2 = '00000000000000000000000000001100'; 
-            machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-            */
     }
   });
 
