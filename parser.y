@@ -83,7 +83,7 @@ struct Symbol* get_symbol(char *name) {
 %%
 
 program:
-    BOOT statement_list END { printf("\n> Program Finished Execution.\n"); }
+    BOOT statement_list END {}
     ;
 
 statement_list:
@@ -260,7 +260,6 @@ void yyerror(const char *s) {
 }
 
 int main() {
-    printf("-- EDOC Interpreter Started. --\n\n");
     yyparse();
     return 0;
 }
