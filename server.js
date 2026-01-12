@@ -49,7 +49,6 @@ function encodeSD(rt, base, offset) {
 }
 
 // --- HELPER: SMART LOADER ---
-// Generates code to load a value (Variable or Number) into a register
 function loadValueIntoRegister(valStr, regNum, machineCodeOutput) {
   let asm = "";
   // Check if it's a number (Immediate)
@@ -83,7 +82,7 @@ function generateMathASM(expr, machineCodeOutput) {
   const op1 = ops[0].trim();
   const op2 = ops[1].trim();
 
-  // 1. Load Operands safely (handles both "a" and "10")
+  // 1. Load Operands safely
   asm += loadValueIntoRegister(op1, 2, machineCodeOutput); // R2
   asm += loadValueIntoRegister(op2, 3, machineCodeOutput); // R3
 
@@ -189,34 +188,23 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING (dsply@)
+    // 3. PRINTING (PURE LOGIC - NO SYSCALL)
     else if (line.startsWith("dsply@")) {
       let content = line.match(/\[(.*?)\]/)[1].trim();
 
-      // Check if it is a math expression using Regex
+      // Just calculate/load the value into R4.
+      // We do NOT add the SYSCALL lines.
       const isMath = /[+\-*/]/.test(content);
 
       if (isMath) {
         let mathResult = generateMathASM(content, machineCodeOutput);
         codeSection += mathResult.asm;
       } else {
-        // Single Value (Variable OR Number)
-        // Load into R4 directly
         codeSection += loadValueIntoRegister(content, 4, machineCodeOutput);
       }
-
-      // Print Syscall
-      codeSection += `DADDIU R2, R0, #1\n`;
-      let b1 = encodeIType(25, 0, 2, 1);
-      machineCodeOutput.code += `${b1} (${binToHex(b1)})\n`;
-
-      codeSection += `SYSCALL\n`;
-      let b2 = "00000000000000000000000000001100";
-      machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
     }
   });
 
-  // NOTE: Exit Syscall removed as per user request
   return { mips: dataSection + codeSection, binary: machineCodeOutput.code };
 }
 
