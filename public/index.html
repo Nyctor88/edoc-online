@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EDOC Web IDE</title>
+    <style>
+      :root {
+        --bg-dark: #1e1e1e;
+        --sidebar: #252526;
+        --accent: #0e639c;
+        --text: #d4d4d4;
+        --terminal: #1e1e1e;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: "Consolas", "Courier New", monospace;
+        background-color: var(--bg-dark);
+        color: var(--text);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Top Bar */
+      header {
+        background-color: #333;
+        padding: 10px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #444;
+      }
+
+      h1 {
+        font-size: 16px;
+        color: #fff;
+      }
+
+      .run-btn {
+        background-color: var(--accent);
+        color: white;
+        border: none;
+        padding: 8px 20px;
+        cursor: pointer;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .run-btn:hover {
+        background-color: #1177bb;
+      }
+
+      /* Main Layout */
+      .container {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* Sidebar (File Explorer style) */
+      .sidebar {
+        width: 200px;
+        background-color: var(--sidebar);
+        border-right: 1px solid #444;
+        padding: 10px;
+        font-size: 14px;
+      }
+      .file-item {
+        padding: 5px;
+        cursor: pointer;
+        background-color: #37373d;
+        color: white;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      /* Editor Area */
+      .editor-area {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* The Code Input */
+      textarea {
+        flex: 2;
+        background-color: var(--bg-dark);
+        color: #d4d4d4;
+        border: none;
+        padding: 20px;
+        resize: none;
+        outline: none;
+        font-family: inherit;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      /* The Terminal Output */
+      .terminal {
+        flex: 1;
+        background-color: #111;
+        border-top: 1px solid #444;
+        padding: 10px;
+        overflow-y: auto;
+        font-size: 14px;
+      }
+
+      .terminal-header {
+        color: #ccc;
+        font-size: 12px;
+        margin-bottom: 5px;
+        text-transform: uppercase;
+        font-weight: bold;
+      }
+
+      pre {
+        white-space: pre-wrap;
+        color: #ccc;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>sample.edoc — EDOC IDE</h1>
+      <button class="run-btn" onclick="runCode()">▶ Run</button>
+    </header>
+
+    <div class="container">
+      <aside class="sidebar">
+        <div style="font-size: 12px; color: #888; margin-bottom: 10px">
+          EXPLORER
+        </div>
+        <div class="file-item">📄 sample.edoc</div>
+      </aside>
+
+      <main class="editor-area">
+        <textarea id="code-input" spellcheck="false">
+boot
+    var. int a = 10
+    var. int b = 5
+
+    dsply ["--- EDOC ONLINE ---"]!!
+    dsply ["Sum of a + b is: "]
+    dsply@[a + b]!!
+end
+            </textarea
+        >
+
+        <div class="terminal">
+          <div class="terminal-header">OUTPUT</div>
+          <pre id="output">Waiting for code execution...</pre>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      async function runCode() {
+        const code = document.getElementById("code-input").value;
+        const outputElement = document.getElementById("output");
+
+        outputElement.style.color = "#aaa";
+        outputElement.innerText = "Running...";
+
+        try {
+          const response = await fetch("http://localhost:3000/compile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: code }),
+          });
+
+          const result = await response.json();
+
+          // Display the output
+          outputElement.style.color = "#fff";
+          outputElement.innerText = result.output;
+        } catch (error) {
+          outputElement.style.color = "red";
+          outputElement.innerText = "Error connecting to compiler server.";
+        }
+      }
+    </script>
+  </body>
+</html>
