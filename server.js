@@ -27,8 +27,48 @@ function binToHex(binStr) {
   return "0x" + hex;
 }
 
-// --- HELPER: MATH GENERATOR (Reused for Assignments and Display) ---
-// Generates assembly to calculate "op1 operator op2" and put result in R4
+// --- HELPER: ENCODING ---
+function encodeRType(opcode, rs, rt, rd, shamt, funct) {
+  return (
+    toBin(opcode, 6) +
+    toBin(rs, 5) +
+    toBin(rt, 5) +
+    toBin(rd, 5) +
+    toBin(shamt, 5) +
+    toBin(funct, 6)
+  );
+}
+function encodeIType(opcode, rs, rt, imm) {
+  return toBin(opcode, 6) + toBin(rs, 5) + toBin(rt, 5) + toBin(imm, 16);
+}
+function encodeLD(rt, base, offset) {
+  return encodeIType(55, base, rt, offset);
+}
+function encodeSD(rt, base, offset) {
+  return encodeIType(63, base, rt, offset);
+}
+
+// --- HELPER: SMART LOADER ---
+// Generates code to load a value (Variable or Number) into a register
+function loadValueIntoRegister(valStr, regNum, machineCodeOutput) {
+  let asm = "";
+  // Check if it's a number (Immediate)
+  if (!isNaN(parseInt(valStr))) {
+    let val = parseInt(valStr);
+    asm += `DADDIU R${regNum}, R0, #${val}\n`;
+    let b = encodeIType(25, 0, regNum, val);
+    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+  }
+  // It's a Variable (Label)
+  else {
+    asm += `LD R${regNum}, ${valStr}(R0)\n`;
+    let b = encodeLD(regNum, 0, 0);
+    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+  }
+  return asm;
+}
+
+// --- HELPER: MATH GENERATOR ---
 function generateMathASM(expr, machineCodeOutput) {
   let asm = "";
   let op = "";
@@ -43,54 +83,44 @@ function generateMathASM(expr, machineCodeOutput) {
   const op1 = ops[0].trim();
   const op2 = ops[1].trim();
 
-  // Load Operand 1 into R2
-  asm += `LD R2, ${op1}(R0)\n`;
-  let b1 = encodeLD(2, 0, 0);
-  machineCodeOutput.code += `${b1} (${binToHex(b1)})\n`;
+  // 1. Load Operands safely (handles both "a" and "10")
+  asm += loadValueIntoRegister(op1, 2, machineCodeOutput); // R2
+  asm += loadValueIntoRegister(op2, 3, machineCodeOutput); // R3
 
-  // Load Operand 2 into R3
-  asm += `LD R3, ${op2}(R0)\n`;
-  let b2 = encodeLD(3, 0, 0);
-  machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-
-  // Perform Op -> Result in R4
+  // 2. Perform Op -> Result in R4
   if (op === "+") {
     asm += `DADDU R4, R2, R3\n`;
-    let b3 = encodeRType(0, 2, 3, 4, 0, 45);
-    machineCodeOutput.code += `${b3} (${binToHex(b3)})\n`;
+    let b = encodeRType(0, 2, 3, 4, 0, 45);
+    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
   } else if (op === "-") {
     asm += `DSUBU R4, R2, R3\n`;
-    let b3 = encodeRType(0, 2, 3, 4, 0, 47);
-    machineCodeOutput.code += `${b3} (${binToHex(b3)})\n`;
+    let b = encodeRType(0, 2, 3, 4, 0, 47);
+    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
   } else if (op === "*") {
     asm += `DMULTU R2, R3\n`;
-    let b3 = encodeRType(0, 2, 3, 0, 0, 29);
-    machineCodeOutput.code += `${b3} (${binToHex(b3)})\n`;
+    let b = encodeRType(0, 2, 3, 0, 0, 29);
+    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
     asm += `MFLO R4\n`;
-    let b4 = encodeRType(0, 0, 0, 4, 0, 18);
-    machineCodeOutput.code += `${b4} (${binToHex(b4)})\n`;
+    let b2 = encodeRType(0, 0, 0, 4, 0, 18);
+    machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
   } else if (op === "/") {
     asm += `DDIVU R2, R3\n`;
-    let b3 = encodeRType(0, 2, 3, 0, 0, 31);
-    machineCodeOutput.code += `${b3} (${binToHex(b3)})\n`;
+    let b = encodeRType(0, 2, 3, 0, 0, 31);
+    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
     asm += `MFLO R4\n`;
-    let b4 = encodeRType(0, 0, 0, 4, 0, 18);
-    machineCodeOutput.code += `${b4} (${binToHex(b4)})\n`;
+    let b2 = encodeRType(0, 0, 0, 4, 0, 18);
+    machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
   }
 
   return { asm: asm, valid: true };
 }
 
-// --- EDU-MIPS64 TRANSPILER ENGINE ---
+// --- MAIN TRANSPILER ENGINE ---
 function generateEduMIPS(sourceCode) {
   const lines = sourceCode.split("\n");
   let dataSection = ".data\n";
   let codeSection = ".code\n";
-
-  // We use an object to pass the string by reference
   let machineCodeOutput = { code: "" };
-
-  let variables = {};
 
   lines.forEach((line) => {
     line = line.trim();
@@ -119,18 +149,16 @@ function generateEduMIPS(sourceCode) {
 
         if (!currentVar) {
           currentVar = token;
-          variables[currentVar] = true;
           dataSection += `${currentVar}: .dword\n`;
         } else {
           let val = parseInt(token);
           if (isNaN(val)) val = 0;
 
           codeSection += `DADDIU R1, R0, #${val}\n`;
-          codeSection += `SD R1, ${currentVar}(R0)\n`;
-
           let bin1 = encodeIType(25, 0, 1, val);
           machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
 
+          codeSection += `SD R1, ${currentVar}(R0)\n`;
           let bin2 = encodeSD(1, 0, 0);
           machineCodeOutput.code += `${bin2} (${binToHex(bin2)})\n`;
 
@@ -145,91 +173,51 @@ function generateEduMIPS(sourceCode) {
       const target = sides[0].trim();
       const expr = sides[1].trim();
 
-      // Try to generate Math ASM
       let mathResult = generateMathASM(expr, machineCodeOutput);
 
       if (mathResult.valid) {
-        // If it was math, result is in R4. Store it to target.
         codeSection += mathResult.asm;
         codeSection += `SD R4, ${target}(R0)\n`;
-        let b5 = encodeSD(4, 0, 0);
-        machineCodeOutput.code += `${b5} (${binToHex(b5)})\n`;
-      }
-      // If not math, simple assignment (x = 5)
-      else if (!isNaN(parseInt(expr))) {
-        let val = parseInt(expr);
-        codeSection += `DADDIU R1, R0, #${val}\n`;
-        let b1 = encodeIType(25, 0, 1, val);
-        machineCodeOutput.code += `${b1} (${binToHex(b1)})\n`;
-
+        let b = encodeSD(4, 0, 0);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      } else {
+        // Direct Assignment (x = 5 OR x = y)
+        codeSection += loadValueIntoRegister(expr, 1, machineCodeOutput);
         codeSection += `SD R1, ${target}(R0)\n`;
-        let b2 = encodeSD(1, 0, 0);
-        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+        let b = encodeSD(1, 0, 0);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
     }
 
-    // 3. PRINTING (FIXED LOGIC)
+    // 3. PRINTING (dsply@)
     else if (line.startsWith("dsply@")) {
-      let content = line.match(/\[(.*?)\]/)[1];
+      let content = line.match(/\[(.*?)\]/)[1].trim();
 
-      // Check if content is an expression (contains + - * /)
-      let mathResult = generateMathASM(content, machineCodeOutput);
+      // Check if it is a math expression using Regex
+      const isMath = /[+\-*/]/.test(content);
 
-      if (mathResult.valid) {
-        // Case A: Printing an Expression (a + b)
-        // The math logic puts result in R4.
-        // We just need to syscall print R4.
+      if (isMath) {
+        let mathResult = generateMathASM(content, machineCodeOutput);
         codeSection += mathResult.asm;
-
-        // Print R4
-        // Note: Syscall expects value in specific register.
-        // If we assume R4 is the print arg, we are good.
       } else {
-        // Case B: Printing a Single Variable (total)
-        codeSection += `LD R4, ${content}(R0)\n`;
-        let b1 = encodeLD(4, 0, 0);
-        machineCodeOutput.code += `${b1} (${binToHex(b1)})\n`;
+        // Single Value (Variable OR Number)
+        // Load into R4 directly
+        codeSection += loadValueIntoRegister(content, 4, machineCodeOutput);
       }
 
-      // Standard Print Syscall setup
+      // Print Syscall
       codeSection += `DADDIU R2, R0, #1\n`;
-      let b2 = encodeIType(25, 0, 2, 1);
-      machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+      let b1 = encodeIType(25, 0, 2, 1);
+      machineCodeOutput.code += `${b1} (${binToHex(b1)})\n`;
 
       codeSection += `SYSCALL\n`;
-      let b3 = "00000000000000000000000000001100";
-      machineCodeOutput.code += `${b3} (${binToHex(b3)})\n`;
+      let b2 = "00000000000000000000000000001100";
+      machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
     }
   });
 
-  // Exit Call
-  codeSection += `DADDIU R2, R0, #10\nSYSCALL\n`;
-  let exitBin = encodeIType(25, 0, 2, 10);
-  machineCodeOutput.code += `${exitBin} (${binToHex(exitBin)})\n`;
-  machineCodeOutput.code += `00000000000000000000000000001100 (0x0000000C)\n`;
-
+  // NOTE: Exit Syscall removed as per user request
   return { mips: dataSection + codeSection, binary: machineCodeOutput.code };
-}
-
-// --- BINARY ENCODING HELPERS ---
-function encodeRType(opcode, rs, rt, rd, shamt, funct) {
-  return (
-    toBin(opcode, 6) +
-    toBin(rs, 5) +
-    toBin(rt, 5) +
-    toBin(rd, 5) +
-    toBin(shamt, 5) +
-    toBin(funct, 6)
-  );
-}
-function encodeIType(opcode, rs, rt, imm) {
-  return toBin(opcode, 6) + toBin(rs, 5) + toBin(rt, 5) + toBin(imm, 16);
-}
-function encodeLD(rt, base, offset) {
-  return encodeIType(55, base, rt, offset);
-}
-function encodeSD(rt, base, offset) {
-  return encodeIType(63, base, rt, offset);
 }
 
 // --- API ENDPOINT ---
