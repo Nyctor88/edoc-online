@@ -14,20 +14,17 @@ app.use(express.static("public"));
 const isWindows = process.platform === "win32";
 const COMPILER_PATH = path.join(__dirname, isWindows ? "edoc.exe" : "edoc");
 
-// --- HELPER: BINARY & HEX CONVERTERS ---
+// --- HELPER: BINARY ENCODING ---
 function toBin(num, bits) {
   let bin = (num >>> 0).toString(2);
   while (bin.length < bits) bin = "0" + bin;
   return bin.slice(-bits);
 }
-
 function binToHex(binStr) {
   let hex = parseInt(binStr, 2).toString(16).toUpperCase();
   while (hex.length < 8) hex = "0" + hex;
   return "0x" + hex;
 }
-
-// --- HELPER: ENCODING ---
 function encodeRType(opcode, rs, rt, rd, shamt, funct) {
   return (
     toBin(opcode, 6) +
@@ -48,73 +45,137 @@ function encodeSD(rt, base, offset) {
   return encodeIType(63, base, rt, offset);
 }
 
-// --- HELPER: SMART LOADER ---
-function loadValueIntoRegister(valStr, regNum, machineCodeOutput) {
+// --- NEW: EXPRESSION PARSER (Shunting-Yard Algorithm) ---
+// This converts "a + b * c" into "a b c * +" (RPN) so we can generate ASM easily.
+
+function tokenize(expr) {
+  // Regex matches: numbers, variables, operators, parentheses
+  const regex = /([0-9]+)|([a-zA-Z_][a-zA-Z0-9_]*)|([\+\-\*\/])|(\()|(\))/g;
+  let tokens = [];
+  let match;
+  while ((match = regex.exec(expr)) !== null) {
+    tokens.push(match[0]);
+  }
+  return tokens;
+}
+
+function shuntingYard(tokens) {
+  let outputQueue = [];
+  let operatorStack = [];
+  const precedence = { "*": 3, "/": 3, "+": 2, "-": 2 };
+
+  tokens.forEach((token) => {
+    if (!isNaN(parseInt(token)) || /^[a-zA-Z_]/.test(token)) {
+      // It's a number or variable
+      outputQueue.push(token);
+    } else if (token in precedence) {
+      while (
+        operatorStack.length > 0 &&
+        operatorStack[operatorStack.length - 1] !== "(" &&
+        precedence[operatorStack[operatorStack.length - 1]] >= precedence[token]
+      ) {
+        outputQueue.push(operatorStack.pop());
+      }
+      operatorStack.push(token);
+    } else if (token === "(") {
+      operatorStack.push(token);
+    } else if (token === ")") {
+      while (
+        operatorStack.length > 0 &&
+        operatorStack[operatorStack.length - 1] !== "("
+      ) {
+        outputQueue.push(operatorStack.pop());
+      }
+      operatorStack.pop(); // Pop '('
+    }
+  });
+
+  while (operatorStack.length > 0) {
+    outputQueue.push(operatorStack.pop());
+  }
+  return outputQueue;
+}
+
+// --- NEW: ASM GENERATOR FOR COMPLEX MATH ---
+function generateComplexASM(expr, machineCodeOutput) {
+  // 1. Handle Unary Minus (Hack: replace "-a" with "0 - a" if at start)
+  //    Simple clean up for common unary cases in stress test
+  expr = expr.replace(/^-\s*([a-zA-Z0-9]+)/, "0 - $1");
+  expr = expr.replace(/\(-\s*([a-zA-Z0-9]+)/g, "(0 - $1");
+
+  const tokens = tokenize(expr);
+  const rpn = shuntingYard(tokens);
+
   let asm = "";
-  // Check if it's a number (Immediate)
-  if (!isNaN(parseInt(valStr))) {
-    let val = parseInt(valStr);
-    asm += `DADDIU R${regNum}, R0, #${val}\n`;
-    let b = encodeIType(25, 0, regNum, val);
+  let regStack = []; // Stack to track which register holds the value
+  let currentReg = 8; // Start using temps from R8 upwards (R8-R23)
+
+  rpn.forEach((token) => {
+    if (!isNaN(parseInt(token))) {
+      // Immediate: Load into next available register
+      let val = parseInt(token);
+      let reg = currentReg++;
+      asm += `DADDIU R${reg}, R0, #${val}\n`;
+      let b = encodeIType(25, 0, reg, val);
+      machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      regStack.push(reg);
+    } else if (/^[a-zA-Z_]/.test(token)) {
+      // Variable: Load into next available register
+      let reg = currentReg++;
+      asm += `LD R${reg}, ${token}(R0)\n`;
+      let b = encodeLD(reg, 0, 0);
+      machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      regStack.push(reg);
+    } else {
+      // Operator: Pop two registers, compute, push result register
+      let rRight = regStack.pop();
+      let rLeft = regStack.pop();
+      let rRes = currentReg++; // New result register
+
+      if (token === "+") {
+        asm += `DADDU R${rRes}, R${rLeft}, R${rRight}\n`;
+        let b = encodeRType(0, rLeft, rRight, rRes, 0, 45);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      } else if (token === "-") {
+        asm += `DSUBU R${rRes}, R${rLeft}, R${rRight}\n`;
+        let b = encodeRType(0, rLeft, rRight, rRes, 0, 47);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      } else if (token === "*") {
+        asm += `DMULTU R${rLeft}, R${rRight}\n`;
+        let b = encodeRType(0, rLeft, rRight, 0, 0, 29);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+
+        asm += `MFLO R${rRes}\n`;
+        let b2 = encodeRType(0, 0, 0, rRes, 0, 18);
+        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+      } else if (token === "/") {
+        asm += `DDIVU R${rLeft}, R${rRight}\n`;
+        let b = encodeRType(0, rLeft, rRight, 0, 0, 31);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+
+        asm += `MFLO R${rRes}\n`;
+        let b2 = encodeRType(0, 0, 0, rRes, 0, 18);
+        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+      }
+      regStack.push(rRes);
+    }
+  });
+
+  // The result is in the last register on stack
+  let finalReg = regStack.pop();
+
+  // Move to R4 (Standard output/result location for our convention)
+  if (finalReg !== 4) {
+    // We use DADDU R4, Rfinal, R0 to move
+    asm += `DADDU R4, R${finalReg}, R0\n`;
+    let b = encodeRType(0, finalReg, 0, 4, 0, 45);
     machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
   }
-  // It's a Variable (Label)
-  else {
-    asm += `LD R${regNum}, ${valStr}(R0)\n`;
-    let b = encodeLD(regNum, 0, 0);
-    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-  }
+
   return asm;
 }
 
-// --- HELPER: MATH GENERATOR ---
-function generateMathASM(expr, machineCodeOutput) {
-  let asm = "";
-  let op = "";
-  if (expr.includes("+")) op = "+";
-  else if (expr.includes("-")) op = "-";
-  else if (expr.includes("*")) op = "*";
-  else if (expr.includes("/")) op = "/";
-
-  if (!op) return { asm: "", valid: false };
-
-  const ops = expr.split(op);
-  const op1 = ops[0].trim();
-  const op2 = ops[1].trim();
-
-  // 1. Load Operands safely (R2 and R3)
-  asm += loadValueIntoRegister(op1, 2, machineCodeOutput);
-  asm += loadValueIntoRegister(op2, 3, machineCodeOutput);
-
-  // 2. Perform Op -> Result in R4
-  if (op === "+") {
-    asm += `DADDU R4, R2, R3\n`;
-    let b = encodeRType(0, 2, 3, 4, 0, 45);
-    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-  } else if (op === "-") {
-    asm += `DSUBU R4, R2, R3\n`;
-    let b = encodeRType(0, 2, 3, 4, 0, 47);
-    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-  } else if (op === "*") {
-    asm += `DMULTU R2, R3\n`;
-    let b = encodeRType(0, 2, 3, 0, 0, 29);
-    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-    asm += `MFLO R4\n`;
-    let b2 = encodeRType(0, 0, 0, 4, 0, 18);
-    machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-  } else if (op === "/") {
-    asm += `DDIVU R2, R3\n`;
-    let b = encodeRType(0, 2, 3, 0, 0, 31);
-    machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-    asm += `MFLO R4\n`;
-    let b2 = encodeRType(0, 0, 0, 4, 0, 18);
-    machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-  }
-
-  return { asm: asm, valid: true };
-}
-
-// --- MAIN TRANSPILER ENGINE ---
+// --- MAIN ENGINE ---
 function generateEduMIPS(sourceCode) {
   const lines = sourceCode.split("\n");
   let dataSection = ".data\n";
@@ -150,7 +211,7 @@ function generateEduMIPS(sourceCode) {
           currentVar = token;
           dataSection += `${currentVar}: .dword\n`;
         } else {
-          let val = parseInt(token);
+          let val = parseInt(token); // Truncates floats to ints for MIPS safety
           if (isNaN(val)) val = 0;
 
           codeSection += `DADDIU R1, R0, #${val}\n`;
@@ -172,33 +233,40 @@ function generateEduMIPS(sourceCode) {
       const target = sides[0].trim();
       const expr = sides[1].trim();
 
-      let mathResult = generateMathASM(expr, machineCodeOutput);
-
-      if (mathResult.valid) {
-        codeSection += mathResult.asm;
+      if (/[+\-*/]/.test(expr)) {
+        // Complex Math
+        codeSection += generateComplexASM(expr, machineCodeOutput);
+        // Store Result (R4)
         codeSection += `SD R4, ${target}(R0)\n`;
         let b = encodeSD(4, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        codeSection += loadValueIntoRegister(expr, 1, machineCodeOutput);
-        codeSection += `SD R1, ${target}(R0)\n`;
-        let b = encodeSD(1, 0, 0);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        // Simple Assignment
+        let val = parseInt(expr);
+        if (!isNaN(val)) {
+          codeSection += `DADDIU R1, R0, #${val}\n`;
+          let b = encodeIType(25, 0, 1, val);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+          codeSection += `SD R1, ${target}(R0)\n`;
+          let b2 = encodeSD(1, 0, 0);
+          machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+        }
       }
     }
 
-    // 3. PRINTING (CLEAN: Logic Only, No Syscalls)
+    // 3. PRINTING
     else if (line.startsWith("dsply@")) {
       let content = line.match(/\[(.*?)\]/)[1].trim();
-      const isMath = /[+\-*/]/.test(content);
 
-      if (isMath) {
-        let mathResult = generateMathASM(content, machineCodeOutput);
-        codeSection += mathResult.asm;
-        // No syscall here
+      if (/[+\-*/]/.test(content)) {
+        // Complex Math Printing
+        codeSection += generateComplexASM(content, machineCodeOutput);
+        // Result is already in R4 from generateComplexASM
       } else {
-        codeSection += loadValueIntoRegister(content, 4, machineCodeOutput);
-        // No syscall here
+        // Single Variable
+        codeSection += `LD R4, ${content}(R0)\n`;
+        let b = encodeLD(4, 0, 0);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
     }
   });
