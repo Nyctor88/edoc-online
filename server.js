@@ -82,9 +82,9 @@ function generateMathASM(expr, machineCodeOutput) {
   const op1 = ops[0].trim();
   const op2 = ops[1].trim();
 
-  // 1. Load Operands safely
-  asm += loadValueIntoRegister(op1, 2, machineCodeOutput); // R2
-  asm += loadValueIntoRegister(op2, 3, machineCodeOutput); // R3
+  // 1. Load Operands safely (R2 and R3)
+  asm += loadValueIntoRegister(op1, 2, machineCodeOutput);
+  asm += loadValueIntoRegister(op2, 3, machineCodeOutput);
 
   // 2. Perform Op -> Result in R4
   if (op === "+") {
@@ -180,7 +180,6 @@ function generateEduMIPS(sourceCode) {
         let b = encodeSD(4, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        // Direct Assignment (x = 5 OR x = y)
         codeSection += loadValueIntoRegister(expr, 1, machineCodeOutput);
         codeSection += `SD R1, ${target}(R0)\n`;
         let b = encodeSD(1, 0, 0);
@@ -188,19 +187,18 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING (PURE LOGIC - NO SYSCALL)
+    // 3. PRINTING (CLEAN: Logic Only, No Syscalls)
     else if (line.startsWith("dsply@")) {
       let content = line.match(/\[(.*?)\]/)[1].trim();
-
-      // Just calculate/load the value into R4.
-      // We do NOT add the SYSCALL lines.
       const isMath = /[+\-*/]/.test(content);
 
       if (isMath) {
         let mathResult = generateMathASM(content, machineCodeOutput);
         codeSection += mathResult.asm;
+        // No syscall here
       } else {
         codeSection += loadValueIntoRegister(content, 4, machineCodeOutput);
+        // No syscall here
       }
     }
   });
