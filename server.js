@@ -16,9 +16,9 @@ const COMPILER_PATH = path.join(__dirname, isWindows ? "edoc.exe" : "edoc");
 
 // --- HELPER: BINARY & HEX CONVERTERS ---
 function toBin(num, bits) {
-  let bin = (num >>> 0).toString(2); // Handle unsigned shift
+  let bin = (num >>> 0).toString(2);
   while (bin.length < bits) bin = "0" + bin;
-  return bin.slice(-bits); // Ensure fit
+  return bin.slice(-bits);
 }
 
 function binToHex(binStr) {
@@ -27,16 +27,15 @@ function binToHex(binStr) {
   return "0x" + hex;
 }
 
-// --- EDU-MIPS64 TRANSPILER ENGINE ---
+// --- EDU-MIPS64 TRANSPILER ENGINE (R-Syntax & .dword) ---
 function generateEduMIPS(sourceCode) {
   const lines = sourceCode.split("\n");
 
+  // Section headers
   let dataSection = ".data\n";
-  let textSection = ".text\n.globl main\nmain:\n";
+  let codeSection = ".code\n"; // Changed from .text to .code
   let machineCodeOutput = "";
 
-  // Register Map for simple allocation
-  // $0=zero, $t0-$t9=temp. We'll map EDOC vars to memory addresses (Labels)
   let variables = {};
 
   lines.forEach((line) => {
@@ -50,11 +49,13 @@ function generateEduMIPS(sourceCode) {
     )
       return;
 
-    // 1. DECLARATIONS: var. int x = 10 -> x: .word64 10
+    // 1. DECLARATIONS: var. int age = 19
+    // Output:
+    // .data -> age: .dword
+    // .code -> DADDIU R1, R0, #19
+    //          SD R1, age(R0)
     if (line.startsWith("var.") || line.startsWith("const.")) {
-      // Remove keywords and parse
       const parts = line.replace(/,/g, " ").replace(/=/g, " ").split(/\s+/);
-      // Expected format loosely: var. int name value
 
       let currentVar = null;
       for (let i = 2; i < parts.length; i++) {
@@ -70,12 +71,24 @@ function generateEduMIPS(sourceCode) {
         if (!currentVar) {
           currentVar = token;
           variables[currentVar] = true;
+          // Declare in .data
+          dataSection += `${currentVar}: .dword\n`;
         } else {
           let val = parseInt(token);
           if (isNaN(val)) val = 0;
 
-          // ASM Output
-          dataSection += `    ${currentVar}: .word64 ${val}\n`;
+          // Init in .code
+          codeSection += `DADDIU R1, R0, #${val}\n`;
+          codeSection += `SD R1, ${currentVar}(R0)\n`;
+
+          // Binary for DADDIU R1, R0, #val (Op: 25, rs:0, rt:1, imm:val)
+          let bin1 = encodeIType(25, 0, 1, val);
+          machineCodeOutput += `${bin1} (${binToHex(bin1)})\n`;
+
+          // Binary for SD R1, var(R0) (Op: 63, base:0, rt:1, offset:0 placeholder)
+          let bin2 = encodeSD(1, 0, 0);
+          machineCodeOutput += `${bin2} (${binToHex(bin2)})\n`;
+
           currentVar = null;
         }
       }
@@ -83,13 +96,11 @@ function generateEduMIPS(sourceCode) {
 
     // 2. ASSIGNMENTS / MATH: total = A + B
     else if (line.includes("=") && !line.startsWith("dsply")) {
-      // Simple Parser: supports "VAR = VAL", "VAR = VAR", "VAR = VAR op VAR"
       const sides = line.split("=");
       const target = sides[0].trim();
       const expr = sides[1].trim();
 
       let asm = "";
-      let bin = [];
 
       // Case A: Binary Math (A + B)
       if (
@@ -108,87 +119,90 @@ function generateEduMIPS(sourceCode) {
         const op1 = ops[0].trim();
         const op2 = ops[1].trim();
 
-        // Load Operand 1 into $t0
-        asm += `    ld $t0, ${op1}\n`;
-        bin.push(encodeLD(8, 0, 0)); // Placeholder offset calculation usually required
+        // Load Operand 1 into R2
+        asm += `LD R2, ${op1}(R0)\n`;
+        let b1 = encodeLD(2, 0, 0);
+        machineCodeOutput += `${b1} (${binToHex(b1)})\n`;
 
-        // Load Operand 2 into $t1
-        asm += `    ld $t1, ${op2}\n`;
-        bin.push(encodeLD(9, 0, 0));
+        // Load Operand 2 into R3
+        asm += `LD R3, ${op2}(R0)\n`;
+        let b2 = encodeLD(3, 0, 0);
+        machineCodeOutput += `${b2} (${binToHex(b2)})\n`;
 
-        // Perform Op
+        // Perform Op -> Result in R4
         if (op === "+") {
-          asm += `    daddu $t2, $t0, $t1\n`;
-          bin.push(encodeRType(0, 8, 9, 10, 0, 45)); // DADDU
+          asm += `DADDU R4, R2, R3\n`;
+          let b3 = encodeRType(0, 2, 3, 4, 0, 45);
+          machineCodeOutput += `${b3} (${binToHex(b3)})\n`;
         } else if (op === "-") {
-          asm += `    dsubu $t2, $t0, $t1\n`;
-          bin.push(encodeRType(0, 8, 9, 10, 0, 47)); // DSUBU
+          asm += `DSUBU R4, R2, R3\n`;
+          let b3 = encodeRType(0, 2, 3, 4, 0, 47);
+          machineCodeOutput += `${b3} (${binToHex(b3)})\n`;
         } else if (op === "*") {
-          asm += `    dmultu $t0, $t1\n`;
-          bin.push(encodeRType(0, 8, 9, 0, 0, 29)); // DMULTU
-          asm += `    mflo $t2\n`;
-          bin.push(encodeRType(0, 0, 0, 10, 0, 18)); // MFLO
+          asm += `DMULTU R2, R3\n`;
+          let b3 = encodeRType(0, 2, 3, 0, 0, 29);
+          machineCodeOutput += `${b3} (${binToHex(b3)})\n`;
+          asm += `MFLO R4\n`;
+          let b4 = encodeRType(0, 0, 0, 4, 0, 18);
+          machineCodeOutput += `${b4} (${binToHex(b4)})\n`;
         } else if (op === "/") {
-          asm += `    ddivu $t0, $t1\n`;
-          bin.push(encodeRType(0, 8, 9, 0, 0, 31)); // DDIVU
-          asm += `    mflo $t2\n`;
-          bin.push(encodeRType(0, 0, 0, 10, 0, 18)); // MFLO
+          asm += `DDIVU R2, R3\n`;
+          let b3 = encodeRType(0, 2, 3, 0, 0, 31);
+          machineCodeOutput += `${b3} (${binToHex(b3)})\n`;
+          asm += `MFLO R4\n`;
+          let b4 = encodeRType(0, 0, 0, 4, 0, 18);
+          machineCodeOutput += `${b4} (${binToHex(b4)})\n`;
         }
 
-        // Store Result
-        asm += `    sd $t2, ${target}\n`;
-        bin.push(encodeSD(10, 0, 0));
+        // Store Result from R4 to target
+        asm += `SD R4, ${target}(R0)\n`;
+        let b5 = encodeSD(4, 0, 0);
+        machineCodeOutput += `${b5} (${binToHex(b5)})\n`;
       }
       // Case B: Direct Assignment (x = 5)
       else if (!isNaN(parseInt(expr))) {
         let val = parseInt(expr);
-        asm += `    daddiu $t0, $zero, ${val}\n`;
-        bin.push(encodeIType(25, 0, 8, val)); // DADDIU
+        asm += `DADDIU R1, R0, #${val}\n`;
+        let b1 = encodeIType(25, 0, 1, val);
+        machineCodeOutput += `${b1} (${binToHex(b1)})\n`;
 
-        asm += `    sd $t0, ${target}\n`;
-        bin.push(encodeSD(8, 0, 0));
+        asm += `SD R1, ${target}(R0)\n`;
+        let b2 = encodeSD(1, 0, 0);
+        machineCodeOutput += `${b2} (${binToHex(b2)})\n`;
       }
-
-      textSection += asm;
-      bin.forEach((b) => {
-        machineCodeOutput += `${b}  (${binToHex(b)})\n`;
-      });
+      codeSection += asm;
     }
 
     // 3. PRINTING: dsply@[x]
     else if (line.startsWith("dsply@")) {
       let content = line.match(/\[(.*?)\]/)[1];
 
-      // Syscall 1 (Print Int)
-      let asm = `    ld $a0, ${content}\n`;
-      let bin = [encodeLD(4, 0, 0)];
+      // Load value into R4 (argument register for syscall)
+      codeSection += `LD R4, ${content}(R0)\n`;
+      let b1 = encodeLD(4, 0, 0);
+      machineCodeOutput += `${b1} (${binToHex(b1)})\n`;
 
-      asm += `    daddiu $v0, $zero, 1\n`;
-      bin.push(encodeIType(25, 0, 2, 1)); // DADDIU $v0, $zero, 1
+      // Set R2 ($v0) to 1 (Print Int)
+      codeSection += `DADDIU R2, R0, #1\n`;
+      let b2 = encodeIType(25, 0, 2, 1);
+      machineCodeOutput += `${b2} (${binToHex(b2)})\n`;
 
-      asm += `    syscall\n`;
-      bin.push("00000000000000000000000000001100"); // SYSCALL code
-
-      textSection += asm;
-      bin.forEach((b) => {
-        machineCodeOutput += `${b}  (${binToHex(b)})\n`;
-      });
+      codeSection += `SYSCALL\n`;
+      let b3 = "00000000000000000000000000001100";
+      machineCodeOutput += `${b3} (${binToHex(b3)})\n`;
     }
   });
 
   // Exit Call
-  textSection += `    daddiu $v0, $zero, 10\n    syscall\n`;
-  machineCodeOutput += `${encodeIType(25, 0, 2, 10)}  (${binToHex(
-    encodeIType(25, 0, 2, 10)
-  )})\n`;
-  machineCodeOutput += `00000000000000000000000000001100  (0x0000000C)\n`;
+  codeSection += `DADDIU R2, R0, #10\nSYSCALL\n`;
+  let exitBin = encodeIType(25, 0, 2, 10);
+  machineCodeOutput += `${exitBin} (${binToHex(exitBin)})\n`;
+  machineCodeOutput += `00000000000000000000000000001100 (0x0000000C)\n`;
 
-  return { mips: dataSection + "\n" + textSection, binary: machineCodeOutput };
+  return { mips: dataSection + codeSection, binary: machineCodeOutput };
 }
 
-// --- BINARY ENCODING HELPERS (MIPS64 SPEC) ---
-
-// R-Type: opcode(6) rs(5) rt(5) rd(5) shamt(5) funct(6)
+// --- BINARY ENCODING HELPERS ---
 function encodeRType(opcode, rs, rt, rd, shamt, funct) {
   return (
     toBin(opcode, 6) +
@@ -200,17 +214,14 @@ function encodeRType(opcode, rs, rt, rd, shamt, funct) {
   );
 }
 
-// I-Type: opcode(6) rs(5) rt(5) immediate(16)
 function encodeIType(opcode, rs, rt, imm) {
   return toBin(opcode, 6) + toBin(rs, 5) + toBin(rt, 5) + toBin(imm, 16);
 }
 
-// LD (Load Double): Opcode 55 (110111)
 function encodeLD(rt, base, offset) {
   return encodeIType(55, base, rt, offset);
 }
 
-// SD (Store Double): Opcode 63 (111111)
 function encodeSD(rt, base, offset) {
   return encodeIType(63, base, rt, offset);
 }
@@ -227,7 +238,6 @@ app.post("/compile", (req, res) => {
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
     fs.unlinkSync(tempFile);
-
     const finalOutput = error ? `Error: ${stderr || error.message}` : stdout;
 
     res.json({
