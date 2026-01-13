@@ -166,6 +166,7 @@ function generateEduMIPS(sourceCode) {
   let codeSection = ".code\n";
 
   let machineCodeOutput = { code: "" };
+  const constantVars = new Set();
 
   // Register Manager
   let tempRegCount = 0;
@@ -177,12 +178,10 @@ function generateEduMIPS(sourceCode) {
     tempRegCount = 0;
   };
 
-  // We use a for-loop to track line numbers for error reporting
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     let line = lines[lineIdx].trim();
-    const lineNum = lineIdx + 1; // 1-based line number for humans
+    const lineNum = lineIdx + 1;
 
-    // 0. Skip Empty/Comments/Keywords
     if (
       !line ||
       line.startsWith("boot") ||
@@ -192,18 +191,18 @@ function generateEduMIPS(sourceCode) {
     )
       continue;
 
-    // 1. DECLARATIONS (Relaxed Syntax)
+    // 1. DECLARATIONS
     const declMatch = line.match(/^(var|const)\s*\.\s*(int|float|char)\b/);
 
     if (declMatch) {
       resetTemps();
-      // Check for Complex Initialization (Math in declaration)
+      const isConst = declMatch[1] === "const";
+
       const hasAssignment = line.includes("=");
       const rightSide = hasAssignment ? line.split("=")[1].trim() : "";
       const isComplex = hasAssignment && /[+\-*/]/.test(rightSide);
 
       if (isComplex) {
-        // Handle: "var.int result = total / groups"
         const leftSide = line.split("=")[0].trim();
         const prefix = leftSide.match(
           /^(var|const)\s*\.\s*(int|float|char)\s+/
@@ -212,6 +211,7 @@ function generateEduMIPS(sourceCode) {
 
         if (!varName)
           throw new Error(`Line ${lineNum}: Missing variable name.`);
+        if (isConst) constantVars.add(varName);
 
         dataSection += `    ${varName}: .dword\n`;
         let result = generateComplexASM(
@@ -224,7 +224,6 @@ function generateEduMIPS(sourceCode) {
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        // Simple Loop
         let cleanLine = line.replace(
           declMatch[0],
           `${declMatch[1]}.${declMatch[2]} `
@@ -242,6 +241,7 @@ function generateEduMIPS(sourceCode) {
 
           if (!currentVar) {
             currentVar = token;
+            if (isConst) constantVars.add(currentVar);
             dataSection += `    ${currentVar}: .dword\n`;
           } else {
             let val = parseInt(token);
@@ -275,6 +275,12 @@ function generateEduMIPS(sourceCode) {
       const operator = match[2];
       let expr = match[3];
 
+      if (constantVars.has(target)) {
+        throw new Error(
+          `Line ${lineNum}: Error. Cannot reassign constant '${target}'.`
+        );
+      }
+
       if (operator !== "=") {
         const mathOp = operator.charAt(0);
         expr = `${target} ${mathOp} (${expr})`;
@@ -301,12 +307,11 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING
+    // 3. PRINTING (Strict dsply@ only)
     else if (line.startsWith("dsply@")) {
       resetTemps();
       let match = line.match(/\[(.*?)\]/);
 
-      // STRICT CHECK: Empty dsply error
       if (!match || !match[1] || match[1].trim() === "") {
         throw new Error(
           `Syntax Error on line ${lineNum}: dsply@[] cannot be empty.`
@@ -324,10 +329,17 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 4. CATCH-ALL: UNKNOWN SYNTAX
+    // 4. HELPFUL ERROR FOR WRONG PRINT SYNTAX
+    else if (line.startsWith("dsply")) {
+      throw new Error(
+        `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
+      );
+    }
+
+    // 5. UNKNOWN SYNTAX
     else {
       throw new Error(
-        `Syntax Error on line ${lineNum}: Unknown or malformed statement "${line}".`
+        `Syntax Error on line ${lineNum}: Unknown statement "${line}".`
       );
     }
   }
