@@ -8,7 +8,7 @@
       :root {
         --bg-dark: #1e1e1e;
         --panel-bg: #252526;
-        --accent: #007acc;
+        --accent: #ab19cf;
         --text-main: #d4d4d4;
         --text-muted: #858585;
         --border: #333;
@@ -44,6 +44,11 @@
         z-index: 10;
       }
 
+      .header-left {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+      }
       h1 {
         font-size: 14px;
         font-weight: 600;
@@ -56,11 +61,15 @@
         margin-right: 5px;
       }
 
-      .run-btn {
-        background-color: #0e8544;
-        color: white;
+      .header-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .btn {
         border: none;
-        padding: 6px 16px;
+        padding: 6px 12px;
         cursor: pointer;
         font-size: 12px;
         font-weight: bold;
@@ -70,11 +79,22 @@
         align-items: center;
         gap: 6px;
       }
+
+      .run-btn {
+        background-color: #0e8544;
+        color: white;
+      }
       .run-btn:hover {
         background-color: #12a856;
       }
-      .run-btn:active {
-        transform: translateY(1px);
+
+      .help-btn {
+        background-color: #444;
+        color: #ddd;
+      }
+      .help-btn:hover {
+        background-color: #555;
+        color: #fff;
       }
 
       /* --- MAIN LAYOUT --- */
@@ -82,18 +102,17 @@
         display: flex;
         flex: 1;
         height: calc(100vh - 45px);
-        /* Default: Side-by-Side for Desktop */
         flex-direction: row;
       }
 
       /* --- LEFT PANE (EDITOR) --- */
       .editor-pane {
-        flex: 6; /* 60% Width on Desktop */
+        flex: 6;
         display: flex;
         border-right: 1px solid var(--border);
         position: relative;
         background-color: var(--bg-dark);
-        min-width: 0; /* Fixes flex overflow issues */
+        min-width: 0;
       }
 
       .line-numbers {
@@ -126,7 +145,7 @@
 
       /* --- RIGHT PANE (OUTPUT) --- */
       .output-pane {
-        flex: 4; /* 40% Width on Desktop */
+        flex: 4;
         display: flex;
         flex-direction: column;
         background-color: var(--panel-bg);
@@ -138,7 +157,7 @@
         display: flex;
         background-color: #1e1e1e;
         border-bottom: 1px solid var(--border);
-        overflow-x: auto; /* Allow horizontal scroll on tiny screens */
+        overflow-x: auto;
       }
 
       .tab-btn {
@@ -190,6 +209,80 @@
         color: #ce9178;
       }
 
+      /* --- MODAL (HELP POPUP) --- */
+      .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 100;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .modal {
+        background: #252526;
+        width: 90%;
+        max-width: 600px;
+        border-radius: 6px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        border: 1px solid #444;
+        display: flex;
+        flex-direction: column;
+        max-height: 85vh;
+      }
+
+      .modal-header {
+        padding: 15px;
+        border-bottom: 1px solid #444;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .modal-title {
+        font-weight: bold;
+        color: #fff;
+      }
+      .close-modal {
+        background: none;
+        border: none;
+        color: #888;
+        font-size: 20px;
+        cursor: pointer;
+      }
+      .close-modal:hover {
+        color: #fff;
+      }
+
+      .modal-body {
+        padding: 15px;
+        overflow-y: auto;
+      }
+
+      /* Keyword Table */
+      .keyword-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        color: #ccc;
+      }
+      .keyword-table th,
+      .keyword-table td {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid #333;
+      }
+      .keyword-table th {
+        color: var(--accent);
+      }
+      .code-font {
+        font-family: var(--font-code);
+        color: #ce9178;
+      }
+
       /* Scrollbar */
       ::-webkit-scrollbar {
         width: 8px;
@@ -202,52 +295,50 @@
         background: #444;
         border-radius: 4px;
       }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #555;
-      }
 
-      /* --- RESPONSIVE LOGIC (MOBILE) --- */
+      /* --- RESPONSIVE LOGIC --- */
       @media (max-width: 768px) {
-        /* 1. Stack Vertical */
         .workspace {
           flex-direction: column;
         }
-
-        /* 2. Adjust Sizes */
         .editor-pane {
-          flex: 1; /* Takes 50% height */
+          flex: 1;
           border-right: none;
           border-bottom: 1px solid var(--border);
         }
         .output-pane {
-          flex: 1; /* Takes remaining 50% height */
+          flex: 1;
           border-left: none;
         }
-
-        /* 3. Header Tweaks */
         header {
           padding: 0 10px;
         }
         h1 {
           font-size: 12px;
         }
-        .run-btn {
-          padding: 6px 12px;
+        .btn {
+          padding: 6px 10px;
           font-size: 11px;
         }
-
-        /* 4. Tab tweaks */
-        .tab-btn {
-          padding: 8px 5px;
-          font-size: 10px;
+        .header-right {
+          gap: 5px;
         }
       }
     </style>
   </head>
   <body>
     <header>
-      <h1><span class="logo">EDOC</span> STUDIO</h1>
-      <button class="run-btn" onclick="runCode()"><span>▶</span> RUN</button>
+      <div class="header-left">
+        <h1><span class="logo">EDOC</span> STUDIO</h1>
+      </div>
+      <div class="header-right">
+        <button class="btn help-btn" onclick="toggleHelp()">
+          <span>?</span> Docs
+        </button>
+        <button class="btn run-btn" onclick="runCode()">
+          <span>▶</span> RUN
+        </button>
+      </div>
     </header>
 
     <div class="workspace">
@@ -297,6 +388,69 @@ end
       </div>
     </div>
 
+    <div id="help-modal" class="modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <span class="modal-title">EDOC Language Reference</span>
+          <button class="close-modal" onclick="toggleHelp()">×</button>
+        </div>
+        <div class="modal-body">
+          <table class="keyword-table">
+            <thead>
+              <tr>
+                <th>Keyword / Symbol</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="code-font">boot ... end</td>
+                <td>Starts and ends the program.</td>
+              </tr>
+              <tr>
+                <td class="code-font">var. / const.</td>
+                <td>Declares a variable or constant.</td>
+              </tr>
+              <tr>
+                <td class="code-font">int / float</td>
+                <td>Data types (e.g., <code>var. int x</code>).</td>
+              </tr>
+              <tr>
+                <td class="code-font">dsply ["text"]</td>
+                <td>Prints text string.</td>
+              </tr>
+              <tr>
+                <td class="code-font">dsply@[ expr ]</td>
+                <td>Prints variable or math result.</td>
+              </tr>
+              <tr>
+                <td class="code-font">! / !!</td>
+                <td>Newline flags (Single / Double).</td>
+              </tr>
+              <tr>
+                <td class="code-font">+ - * /</td>
+                <td>Arithmetic operators.</td>
+              </tr>
+              <tr>
+                <td class="code-font">=</td>
+                <td>Assignment operator.</td>
+              </tr>
+            </tbody>
+          </table>
+          <div
+            style="
+              margin-top: 15px;
+              font-size: 12px;
+              color: #888;
+              text-align: center;
+            "
+          >
+            Tip: Variables are case-sensitive. Use lowercase for keywords.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script>
       function handleTab(e) {
         if (e.key == "Tab") {
@@ -330,13 +484,28 @@ end
         btn.classList.add("active");
       }
 
+      function toggleHelp() {
+        const modal = document.getElementById("help-modal");
+        if (modal.style.display === "flex") {
+          modal.style.display = "none";
+        } else {
+          modal.style.display = "flex";
+        }
+      }
+
+      // Close modal when clicking outside
+      document
+        .getElementById("help-modal")
+        .addEventListener("click", function (e) {
+          if (e.target === this) toggleHelp();
+        });
+
       async function runCode() {
         const code = document.getElementById("code-input").value;
         const outputText = document.getElementById("output-text");
         const mipsText = document.getElementById("mips-text");
         const machineText = document.getElementById("machine-text");
 
-        // Auto-switch to output on mobile to see result immediately
         if (window.innerWidth <= 768) {
           openTab("output-tab", document.querySelector(".tab-btn"));
         }
