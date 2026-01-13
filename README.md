@@ -11,7 +11,7 @@
 ### 🖥️ The Language (EDOC)
 * **Strict Typing:** Supports `int`, `float`, and `char` data types.
 * **Safety First:** Includes `const` declarations for immutable variables.
-* **Arithmetic Power:** Handles complex order of operations (PEMDAS), parentheses, and mixed-mode arithmetic (Int/Float).
+* **Arithmetic Power:** Handles complex order of operations (PEMDAS).
 * **Built-in I/O:** `dsply` for strings and `dsply@` for variables and expressions.
 
 ### 🛠️ The IDE (Web Studio)
@@ -60,8 +60,8 @@ total = a + b * (c - 5)
 If you want to run this project on your own machine:
 
 ### Prerequisites
-C Compiler: GCC, Flex, Bison (or WinFlexBison for Windows).
-Node.js: Installed globally.
+* **C Compiler: GCC, Flex, Bison (or WinFlexBison for Windows).
+* **Node.js: Installed globally.
 
 ### Steps
 ### 1. Clone the Repository
