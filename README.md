@@ -2,7 +2,7 @@
 
 **EDOC** is a custom programming language designed for educational purposes, focusing on strict typing and C-like syntax. **EDOC Studio** is the accompanying web-based IDE that allows users to write, execute, and inspect the assembly translation of EDOC programs directly in the browser.
 
-[**🚀 Try the Live Demo**]([https://edoc-compiler.onrender.com](https://edoc-online.onrender.com/)
+[**🚀 Try the Live Demo**](https://edoc-online.onrender.com/)
 
 ---
 
