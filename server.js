@@ -188,56 +188,100 @@ function generateEduMIPS(sourceCode) {
     )
       return;
 
-    // No spaces allowed around the dot.
-    const declMatch = line.match(/^(var|const)\.(int|float|char)\b/);
+    // Matches "var.int", "var . int", "var. int" etc.
+    const declMatch = line.match(/^(var|const)\s*\.\s*(int|float|char)\b/);
 
     if (declMatch) {
       resetTemps();
-      // We don't need to normalize anymore because we only accept the strict form.
-      // Just split by space/comma/equals to get tokens.
-      const parts = line.replace(/,/g, " ").replace(/=/g, " ").split(/\s+/);
 
-      let currentVar = null;
+      // If the line contains an '=' and math operators (+, -, *, /) on the right side
+      // we handle it as a complex assignment, NOT a simple list.
+      const hasAssignment = line.includes("=");
+      const rightSide = hasAssignment ? line.split("=")[1].trim() : "";
+      const isComplex = hasAssignment && /[+\-*/]/.test(rightSide);
 
-      for (let i = 0; i < parts.length; i++) {
-        let token = parts[i];
+      if (isComplex) {
+        // Handle: "var.int result = total / groups"
 
-        // Skip the strict keywords
-        if (
-          token === "var.int" ||
-          token === "var.float" ||
-          token === "var.char" ||
-          token === "const.int" ||
-          token === "const.float" ||
-          token === "const.char" ||
-          token === ""
-        )
-          continue;
+        // 1. Extract the variable name
+        const leftSide = line.split("=")[0].trim();
+        // Remove the "var . int" prefix to get just the name
+        const prefix = leftSide.match(
+          /^(var|const)\s*\.\s*(int|float|char)\s+/
+        )[0];
+        const varName = leftSide.replace(prefix, "").trim();
 
-        if (!currentVar) {
-          // Found a variable name (e.g., "a")
-          currentVar = token;
-          dataSection += `    ${currentVar}: .dword\n`;
-        } else {
-          // Found a value (e.g., "5")
-          let val = parseInt(token);
-          if (isNaN(val)) val = 0;
+        // 2. Register in .data
+        dataSection += `    ${varName}: .dword\n`;
 
-          let reg = getNextReg();
-          codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
-          let bin1 = encodeIType(25, 0, reg, val);
-          machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
+        // 3. Generate Math Code for the expression
+        let result = generateComplexASM(
+          rightSide,
+          machineCodeOutput,
+          getNextReg
+        );
+        codeSection += result.asm;
 
-          codeSection += `    SD R${reg}, ${currentVar}(R0)\n`;
-          let bin2 = encodeSD(reg, 0, 0);
-          machineCodeOutput.code += `${bin2} (${binToHex(bin2)})\n`;
+        // 4. Store the result
+        codeSection += `    SD R${result.reg}, ${varName}(R0)\n`;
+        let b = encodeSD(result.reg, 0, 0);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      } else {
+        // Handles: "var.int a = 5" or "var.int a=1, b=2"
+        // Normalize the line: Force "var . int" -> "var.int" to simplify parsing
+        let cleanLine = line.replace(
+          declMatch[0],
+          `${declMatch[1]}.${declMatch[2]} `
+        );
 
-          currentVar = null;
+        // Split by space/comma/equal
+        const parts = cleanLine
+          .replace(/,/g, " ")
+          .replace(/=/g, " ")
+          .split(/\s+/);
+
+        let currentVar = null;
+
+        for (let i = 0; i < parts.length; i++) {
+          let token = parts[i];
+
+          // Skip keywords
+          if (
+            token === "var.int" ||
+            token === "var.float" ||
+            token === "var.char" ||
+            token === "const.int" ||
+            token === "const.float" ||
+            token === "const.char" ||
+            token === ""
+          )
+            continue;
+
+          if (!currentVar) {
+            // Found Variable Name
+            currentVar = token;
+            dataSection += `    ${currentVar}: .dword\n`;
+          } else {
+            // Found Value (Must be a simple number in this loop)
+            let val = parseInt(token);
+            if (isNaN(val)) val = 0;
+
+            let reg = getNextReg();
+            codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
+            let bin1 = encodeIType(25, 0, reg, val);
+            machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
+
+            codeSection += `    SD R${reg}, ${currentVar}(R0)\n`;
+            let bin2 = encodeSD(reg, 0, 0);
+            machineCodeOutput.code += `${bin2} (${binToHex(bin2)})\n`;
+
+            currentVar = null;
+          }
         }
       }
     }
 
-    // --- FIX 2: Assignments & Compound Operators (+=, -=) ---
+    // --- Assignments & Compound Operators (+=, -=) ---
     else if (
       /^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/.test(line) &&
       !line.startsWith("dsply")
@@ -249,22 +293,18 @@ function generateEduMIPS(sourceCode) {
       const operator = match[2];
       let expr = match[3];
 
-      // Logic: If operator is "+=", expand "expr" to "target + (expr)"
       if (operator !== "=") {
-        const mathOp = operator.charAt(0); // gets +, -, *, or /
+        const mathOp = operator.charAt(0);
         expr = `${target} ${mathOp} (${expr})`;
       }
 
       if (/[+\-*/]/.test(expr)) {
-        // Complex Math
         let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
         codeSection += result.asm;
-
         codeSection += `    SD R${result.reg}, ${target}(R0)\n`;
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        // Simple Assignment
         let val = parseInt(expr);
         if (!isNaN(val)) {
           let reg = getNextReg();
@@ -279,7 +319,7 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING
+    // --- Printing ---
     else if (line.startsWith("dsply@")) {
       resetTemps();
       let content = line.match(/\[(.*?)\]/)[1].trim();
@@ -318,7 +358,6 @@ app.post("/compile", (req, res) => {
     // Cleanup temp file
     if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
 
-    // --- THE FIX IS HERE ---
     let finalOutput = stdout;
 
     // If 'stderr' has content (like "Syntax Error"), append it to output
