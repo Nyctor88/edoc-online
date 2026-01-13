@@ -207,7 +207,7 @@ function generateEduMIPS(sourceCode) {
 
         if (!currentVar) {
           currentVar = token;
-          dataSection += `${currentVar}: .dword\n`;
+          dataSection += `    ${currentVar}: .dword\n`;
         } else {
           let val = parseInt(token);
           if (isNaN(val)) val = 0;
