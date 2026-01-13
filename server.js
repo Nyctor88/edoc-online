@@ -322,10 +322,6 @@ function generateEduMIPS(sourceCode) {
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
-      } else {
-        codeSection += `    LD R4, ${content}(R0)\n`;
-        let b = encodeLD(4, 0, 0);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
     }
 
