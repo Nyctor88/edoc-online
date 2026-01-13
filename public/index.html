@@ -57,7 +57,7 @@
       }
 
       .run-btn {
-        background-color: #0e8544; /* Green Run Button */
+        background-color: #0e8544;
         color: white;
         border: none;
         padding: 6px 16px;
@@ -82,28 +82,30 @@
         display: flex;
         flex: 1;
         height: calc(100vh - 45px);
+        /* Default: Side-by-Side for Desktop */
+        flex-direction: row;
       }
 
       /* --- LEFT PANE (EDITOR) --- */
       .editor-pane {
-        flex: 6; /* Takes up 60% of width */
+        flex: 6; /* 60% Width on Desktop */
         display: flex;
         border-right: 1px solid var(--border);
         position: relative;
         background-color: var(--bg-dark);
+        min-width: 0; /* Fixes flex overflow issues */
       }
 
       .line-numbers {
-        width: 45px;
+        width: 40px;
         background-color: var(--bg-dark);
         color: var(--text-muted);
         text-align: right;
         padding: 10px 8px 10px 0;
         font-family: var(--font-code);
         font-size: 14px;
-        line-height: 24px; /* Must match textarea line-height */
+        line-height: 24px;
         user-select: none;
-        overflow: hidden;
         border-right: 1px solid #2d2d2d;
       }
 
@@ -117,25 +119,26 @@
         outline: none;
         font-family: var(--font-code);
         font-size: 14px;
-        line-height: 24px; /* Fixed line height for alignment */
+        line-height: 24px;
         white-space: pre;
         overflow: auto;
       }
 
       /* --- RIGHT PANE (OUTPUT) --- */
       .output-pane {
-        flex: 4; /* Takes up 40% of width */
+        flex: 4; /* 40% Width on Desktop */
         display: flex;
         flex-direction: column;
         background-color: var(--panel-bg);
         border-left: 1px solid #000;
+        min-width: 0;
       }
 
-      /* Tabs Header */
       .tabs-header {
         display: flex;
         background-color: #1e1e1e;
         border-bottom: 1px solid var(--border);
+        overflow-x: auto; /* Allow horizontal scroll on tiny screens */
       }
 
       .tab-btn {
@@ -150,20 +153,19 @@
         text-transform: uppercase;
         border-bottom: 2px solid transparent;
         transition: all 0.2s;
+        white-space: nowrap;
       }
 
       .tab-btn:hover {
         color: #fff;
         background-color: #2a2a2a;
       }
-
       .tab-btn.active {
         color: #fff;
         border-bottom: 2px solid var(--accent);
         background-color: var(--panel-bg);
       }
 
-      /* Tab Content */
       .tab-content {
         flex: 1;
         padding: 15px;
@@ -173,45 +175,79 @@
         font-size: 13px;
         line-height: 1.5;
       }
-
       .tab-content.active {
         display: block;
       }
 
-      /* Specific styles for different outputs */
+      /* Output Colors */
       #output-text {
         color: #fff;
       }
       #mips-text {
         color: #9cdcfe;
-      } /* Blueish for assembly */
+      }
       #machine-text {
         color: #ce9178;
-      } /* Reddish for hex */
+      }
 
-      /* Scrollbar styling */
+      /* Scrollbar */
       ::-webkit-scrollbar {
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
       }
       ::-webkit-scrollbar-track {
         background: #1e1e1e;
       }
       ::-webkit-scrollbar-thumb {
         background: #444;
-        border-radius: 5px;
+        border-radius: 4px;
       }
       ::-webkit-scrollbar-thumb:hover {
         background: #555;
+      }
+
+      /* --- RESPONSIVE LOGIC (MOBILE) --- */
+      @media (max-width: 768px) {
+        /* 1. Stack Vertical */
+        .workspace {
+          flex-direction: column;
+        }
+
+        /* 2. Adjust Sizes */
+        .editor-pane {
+          flex: 1; /* Takes 50% height */
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
+        .output-pane {
+          flex: 1; /* Takes remaining 50% height */
+          border-left: none;
+        }
+
+        /* 3. Header Tweaks */
+        header {
+          padding: 0 10px;
+        }
+        h1 {
+          font-size: 12px;
+        }
+        .run-btn {
+          padding: 6px 12px;
+          font-size: 11px;
+        }
+
+        /* 4. Tab tweaks */
+        .tab-btn {
+          padding: 8px 5px;
+          font-size: 10px;
+        }
       }
     </style>
   </head>
   <body>
     <header>
       <h1><span class="logo">EDOC</span> STUDIO</h1>
-      <button class="run-btn" onclick="runCode()">
-        <span>▶</span> RUN CODE
-      </button>
+      <button class="run-btn" onclick="runCode()"><span>▶</span> RUN</button>
     </header>
 
     <div class="workspace">
@@ -245,7 +281,7 @@ end
             Assembly
           </button>
           <button class="tab-btn" onclick="openTab('machine-tab', this)">
-            Machine Code
+            Binary
           </button>
         </div>
 
@@ -262,61 +298,48 @@ end
     </div>
 
     <script>
-      // --- 1. TAB KEY SUPPORT ---
       function handleTab(e) {
         if (e.key == "Tab") {
           e.preventDefault();
-          // Insert 4 spaces at cursor position
           document.execCommand("insertText", false, "    ");
         }
       }
 
-      // --- 2. LINE NUMBERS LOGIC ---
       function updateLineNumbers() {
         const textarea = document.getElementById("code-input");
         const lines = textarea.value.split("\n").length;
-        const lineNumbersElem = document.getElementById("line-numbers");
-
-        // Generate numbers 1 to N
-        lineNumbersElem.innerHTML = Array(lines)
+        document.getElementById("line-numbers").innerHTML = Array(lines)
           .fill(0)
           .map((_, i) => i + 1)
           .join("<br>");
       }
 
-      // --- 3. SYNC SCROLLING ---
       function syncScroll() {
-        const textarea = document.getElementById("code-input");
-        const lineNumbersElem = document.getElementById("line-numbers");
-        lineNumbersElem.scrollTop = textarea.scrollTop;
+        document.getElementById("line-numbers").scrollTop =
+          document.getElementById("code-input").scrollTop;
       }
 
-      // --- 4. TAB SWITCHING UI ---
       function openTab(tabId, btn) {
-        // Hide all contents
         document
           .querySelectorAll(".tab-content")
           .forEach((t) => t.classList.remove("active"));
-        // Deactivate all buttons
         document
           .querySelectorAll(".tab-btn")
           .forEach((b) => b.classList.remove("active"));
-
-        // Activate chosen one
         document.getElementById(tabId).classList.add("active");
         btn.classList.add("active");
       }
 
-      // --- 5. RUN CODE (Connects to your existing backend) ---
       async function runCode() {
         const code = document.getElementById("code-input").value;
         const outputText = document.getElementById("output-text");
         const mipsText = document.getElementById("mips-text");
         const machineText = document.getElementById("machine-text");
 
-        // Switch to output tab automatically on run
-        openTab("output-tab", document.querySelector(".tab-btn"));
-        document.querySelectorAll(".tab-btn")[0].classList.add("active"); // Highlight first button
+        // Auto-switch to output on mobile to see result immediately
+        if (window.innerWidth <= 768) {
+          openTab("output-tab", document.querySelector(".tab-btn"));
+        }
 
         outputText.innerText = "Running...";
         mipsText.innerText = "Generating...";
@@ -339,7 +362,6 @@ end
         }
       }
 
-      // Initialize line numbers on load
       updateLineNumbers();
     </script>
   </body>
