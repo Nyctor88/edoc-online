@@ -284,17 +284,36 @@ app.post("/compile", (req, res) => {
   const code = req.body.code;
   const tempFile = path.join(__dirname, "temp_code.txt");
 
-  // 1. Generate eduMIPS Translations
-  const translations = generateEduMIPS(code);
+  // 1. Generate eduMIPS Translations (Wrapped in Try-Catch for safety)
+  let translations = { mips: "", binary: "" };
+  try {
+    translations = generateEduMIPS(code);
+  } catch (err) {
+    translations.mips = `Transpiler Error: ${err.message}`;
+    translations.binary = "Error generating binary.";
+  }
 
   // 2. Run Actual Interpreter
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
-    fs.unlinkSync(tempFile);
-    const finalOutput = error ? `Error: ${stderr || error.message}` : stdout;
+    // Cleanup temp file
+    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+
+    // --- THE FIX IS HERE ---
+    let finalOutput = stdout;
+
+    // If 'stderr' has content (like "Syntax Error"), append it to output
+    if (stderr) {
+      finalOutput += `\n--- Errors ---\n${stderr}`;
+    }
+
+    // If 'error' exists (Execution crash/timeout), append that too
+    if (error) {
+      finalOutput += `\n--- System Error ---\n${error.message}`;
+    }
 
     res.json({
-      output: finalOutput,
+      output: finalOutput || "No Output (Check your code)",
       mips: translations.mips,
       binary: translations.binary,
     });
