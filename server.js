@@ -307,7 +307,7 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING (Strict dsply@ only)
+    // 3. PRINTING (Strict dsply@ for variables)
     else if (line.startsWith("dsply@")) {
       resetTemps();
       let match = line.match(/\[(.*?)\]/);
@@ -329,11 +329,19 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 4. HELPFUL ERROR FOR WRONG PRINT SYNTAX
+    // 4. PRINTING STRINGS vs WRONG SYNTAX
     else if (line.startsWith("dsply")) {
-      throw new Error(
-        `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
-      );
+      if (line.includes('"')) {
+        // It's a string literal like: dsply ["Hello"]
+        // We allow it to pass so the C interpreter runs.
+        // (Optional) We can add a comment in the assembly view.
+        codeSection += `    # Print String operation\n`;
+      } else {
+        // It's NOT a string, so it must be a malformed variable print
+        throw new Error(
+          `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
+        );
+      }
     }
 
     // 5. UNKNOWN SYNTAX
