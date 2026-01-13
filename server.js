@@ -164,16 +164,14 @@ function generateEduMIPS(sourceCode) {
   const lines = sourceCode.split("\n");
   let dataSection = ".data\n";
   let codeSection = ".code\n";
-  // Version Marker
-  codeSection += "";
 
   let machineCodeOutput = { code: "" };
 
-  // Register Manager (Scoped locally to this function call)
+  // Register Manager
   let tempRegCount = 0;
   const getNextReg = () => {
     tempRegCount++;
-    return tempRegCount; // Returns 1, 2, 3...
+    return tempRegCount;
   };
   const resetTemps = () => {
     tempRegCount = 0;
@@ -190,29 +188,42 @@ function generateEduMIPS(sourceCode) {
     )
       return;
 
-    // 1. DECLARATIONS
-    if (line.startsWith("var.") || line.startsWith("const.")) {
+    // No spaces allowed around the dot.
+    const declMatch = line.match(/^(var|const)\.(int|float|char)\b/);
+
+    if (declMatch) {
       resetTemps();
+      // We don't need to normalize anymore because we only accept the strict form.
+      // Just split by space/comma/equals to get tokens.
       const parts = line.replace(/,/g, " ").replace(/=/g, " ").split(/\s+/);
+
       let currentVar = null;
-      for (let i = 2; i < parts.length; i++) {
+
+      for (let i = 0; i < parts.length; i++) {
         let token = parts[i];
+
+        // Skip the strict keywords
         if (
-          token === "var." ||
-          token === "const." ||
-          token === "int" ||
-          token === "float"
+          token === "var.int" ||
+          token === "var.float" ||
+          token === "var.char" ||
+          token === "const.int" ||
+          token === "const.float" ||
+          token === "const.char" ||
+          token === ""
         )
           continue;
 
         if (!currentVar) {
+          // Found a variable name (e.g., "a")
           currentVar = token;
           dataSection += `    ${currentVar}: .dword\n`;
         } else {
+          // Found a value (e.g., "5")
           let val = parseInt(token);
           if (isNaN(val)) val = 0;
 
-          let reg = getNextReg(); // R1
+          let reg = getNextReg();
           codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
           let bin1 = encodeIType(25, 0, reg, val);
           machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
@@ -226,19 +237,29 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 2. ASSIGNMENTS
-    else if (line.includes("=") && !line.startsWith("dsply")) {
+    // --- FIX 2: Assignments & Compound Operators (+=, -=) ---
+    else if (
+      /^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/.test(line) &&
+      !line.startsWith("dsply")
+    ) {
       resetTemps();
-      const sides = line.split("=");
-      const target = sides[0].trim();
-      const expr = sides[1].trim();
+
+      const match = line.match(/^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/);
+      const target = match[1];
+      const operator = match[2];
+      let expr = match[3];
+
+      // Logic: If operator is "+=", expand "expr" to "target + (expr)"
+      if (operator !== "=") {
+        const mathOp = operator.charAt(0); // gets +, -, *, or /
+        expr = `${target} ${mathOp} (${expr})`;
+      }
 
       if (/[+\-*/]/.test(expr)) {
         // Complex Math
         let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
         codeSection += result.asm;
 
-        // DIRECT STORE (No extra moves)
         codeSection += `    SD R${result.reg}, ${target}(R0)\n`;
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
@@ -266,10 +287,8 @@ function generateEduMIPS(sourceCode) {
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
-        // Result is in result.reg. We leave it there.
       } else {
-        // Single Variable
-        codeSection += `    LD R4, ${content}(R0)\n`; // Using R4 as convention for single vars
+        codeSection += `    LD R4, ${content}(R0)\n`;
         let b = encodeLD(4, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
