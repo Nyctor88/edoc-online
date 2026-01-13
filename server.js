@@ -319,21 +319,19 @@ function generateEduMIPS(sourceCode) {
       }
 
       let content = match[1].trim();
+
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
       }
+      // Single variables generate NO assembly (silent)
     }
 
     // 4. PRINTING STRINGS vs WRONG SYNTAX
     else if (line.startsWith("dsply")) {
       if (line.includes('"')) {
-        // It's a string literal like: dsply ["Hello"]
-        // We allow it to pass so the C interpreter runs.
-        // (Optional) We can add a comment in the assembly view.
-        codeSection += `    # Print String operation\n`;
+        // String literal -> Do nothing in Assembly panel (Silent pass-through)
       } else {
-        // It's NOT a string, so it must be a malformed variable print
         throw new Error(
           `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
         );
