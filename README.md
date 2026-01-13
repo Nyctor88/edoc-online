@@ -60,8 +60,8 @@ total = a + b * (c - 5)
 If you want to run this project on your own machine:
 
 ### Prerequisites
-* **C Compiler: GCC, Flex, Bison (or WinFlexBison for Windows).
-* **Node.js: Installed globally.
+* C Compiler: GCC, Flex, Bison (or WinFlexBison for Windows).
+* Node.js: Installed globally.
 
 ### Steps
 ### 1. Clone the Repository
