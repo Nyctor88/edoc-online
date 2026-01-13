@@ -177,8 +177,12 @@ function generateEduMIPS(sourceCode) {
     tempRegCount = 0;
   };
 
-  lines.forEach((line) => {
-    line = line.trim();
+  // We use a for-loop to track line numbers for error reporting
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    let line = lines[lineIdx].trim();
+    const lineNum = lineIdx + 1; // 1-based line number for humans
+
+    // 0. Skip Empty/Comments/Keywords
     if (
       !line ||
       line.startsWith("boot") ||
@@ -186,108 +190,86 @@ function generateEduMIPS(sourceCode) {
       line.startsWith("//") ||
       line.startsWith("#")
     )
-      return;
+      continue;
 
-    // Matches "var.int", "var . int", "var. int" etc.
+    // 1. DECLARATIONS (Relaxed Syntax)
     const declMatch = line.match(/^(var|const)\s*\.\s*(int|float|char)\b/);
 
     if (declMatch) {
       resetTemps();
-
-      // If the line contains an '=' and math operators (+, -, *, /) on the right side
-      // we handle it as a complex assignment, NOT a simple list.
+      // Check for Complex Initialization (Math in declaration)
       const hasAssignment = line.includes("=");
       const rightSide = hasAssignment ? line.split("=")[1].trim() : "";
       const isComplex = hasAssignment && /[+\-*/]/.test(rightSide);
 
       if (isComplex) {
         // Handle: "var.int result = total / groups"
-
-        // 1. Extract the variable name
         const leftSide = line.split("=")[0].trim();
-        // Remove the "var . int" prefix to get just the name
         const prefix = leftSide.match(
           /^(var|const)\s*\.\s*(int|float|char)\s+/
         )[0];
         const varName = leftSide.replace(prefix, "").trim();
 
-        // 2. Register in .data
-        dataSection += `    ${varName}: .dword\n`;
+        if (!varName)
+          throw new Error(`Line ${lineNum}: Missing variable name.`);
 
-        // 3. Generate Math Code for the expression
+        dataSection += `    ${varName}: .dword\n`;
         let result = generateComplexASM(
           rightSide,
           machineCodeOutput,
           getNextReg
         );
         codeSection += result.asm;
-
-        // 4. Store the result
         codeSection += `    SD R${result.reg}, ${varName}(R0)\n`;
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        // Handles: "var.int a = 5" or "var.int a=1, b=2"
-        // Normalize the line: Force "var . int" -> "var.int" to simplify parsing
+        // Simple Loop
         let cleanLine = line.replace(
           declMatch[0],
           `${declMatch[1]}.${declMatch[2]} `
         );
-
-        // Split by space/comma/equal
         const parts = cleanLine
           .replace(/,/g, " ")
           .replace(/=/g, " ")
           .split(/\s+/);
-
         let currentVar = null;
 
         for (let i = 0; i < parts.length; i++) {
           let token = parts[i];
-
-          // Skip keywords
-          if (
-            token === "var.int" ||
-            token === "var.float" ||
-            token === "var.char" ||
-            token === "const.int" ||
-            token === "const.float" ||
-            token === "const.char" ||
-            token === ""
-          )
+          if (/^(var|const)\.(int|float|char)$/.test(token) || token === "")
             continue;
 
           if (!currentVar) {
-            // Found Variable Name
             currentVar = token;
             dataSection += `    ${currentVar}: .dword\n`;
           } else {
-            // Found Value (Must be a simple number in this loop)
             let val = parseInt(token);
-            if (isNaN(val)) val = 0;
+            if (isNaN(val))
+              throw new Error(
+                `Line ${lineNum}: Invalid value assigned to '${currentVar}'.`
+              );
 
             let reg = getNextReg();
             codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
-            let bin1 = encodeIType(25, 0, reg, val);
-            machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
+            let b = encodeIType(25, 0, reg, val);
+            machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
             codeSection += `    SD R${reg}, ${currentVar}(R0)\n`;
-            let bin2 = encodeSD(reg, 0, 0);
-            machineCodeOutput.code += `${bin2} (${binToHex(bin2)})\n`;
-
+            let b2 = encodeSD(reg, 0, 0);
+            machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
             currentVar = null;
           }
         }
       }
     }
 
-    // --- Assignments & Compound Operators (+=, -=) ---
+    // 2. ASSIGNMENTS
     else if (
       /^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/.test(line) &&
       !line.startsWith("dsply")
     ) {
       resetTemps();
-
       const match = line.match(/^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/);
       const target = match[1];
       const operator = match[2];
@@ -306,24 +288,32 @@ function generateEduMIPS(sourceCode) {
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
         let val = parseInt(expr);
-        if (!isNaN(val)) {
-          let reg = getNextReg();
-          codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
-          let b = encodeIType(25, 0, reg, val);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        if (isNaN(val))
+          throw new Error(`Line ${lineNum}: Invalid assignment value.`);
 
-          codeSection += `    SD R${reg}, ${target}(R0)\n`;
-          let b2 = encodeSD(reg, 0, 0);
-          machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-        }
+        let reg = getNextReg();
+        codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
+        let b = encodeIType(25, 0, reg, val);
+        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        codeSection += `    SD R${reg}, ${target}(R0)\n`;
+        let b2 = encodeSD(reg, 0, 0);
+        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
       }
     }
 
-    // --- Printing ---
+    // 3. PRINTING
     else if (line.startsWith("dsply@")) {
       resetTemps();
-      let content = line.match(/\[(.*?)\]/)[1].trim();
+      let match = line.match(/\[(.*?)\]/);
 
+      // STRICT CHECK: Empty dsply error
+      if (!match || !match[1] || match[1].trim() === "") {
+        throw new Error(
+          `Syntax Error on line ${lineNum}: dsply@[] cannot be empty.`
+        );
+      }
+
+      let content = match[1].trim();
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
@@ -333,7 +323,14 @@ function generateEduMIPS(sourceCode) {
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
     }
-  });
+
+    // 4. CATCH-ALL: UNKNOWN SYNTAX
+    else {
+      throw new Error(
+        `Syntax Error on line ${lineNum}: Unknown or malformed statement "${line}".`
+      );
+    }
+  }
 
   return { mips: dataSection + codeSection, binary: machineCodeOutput.code };
 }
@@ -343,16 +340,21 @@ app.post("/compile", (req, res) => {
   const code = req.body.code;
   const tempFile = path.join(__dirname, "temp_code.txt");
 
-  // 1. Generate eduMIPS Translations (Wrapped in Try-Catch for safety)
-  let translations = { mips: "", binary: "" };
+  let translations;
+
+  // 1. Try to Transpile
   try {
     translations = generateEduMIPS(code);
   } catch (err) {
-    translations.mips = `Transpiler Error: ${err.message}`;
-    translations.binary = "Error generating binary.";
+    // STOP EVERYTHING IF ERROR FOUND
+    return res.json({
+      output: `Error: ${err.message}`, // The clean error message
+      mips: "", // Hide MIPS
+      binary: "", // Hide Binary
+    });
   }
 
-  // 2. Run Actual Interpreter
+  // 2. If Transpilation Succeeded, Run Actual Interpreter
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
     // Cleanup temp file
@@ -360,12 +362,9 @@ app.post("/compile", (req, res) => {
 
     let finalOutput = stdout;
 
-    // If 'stderr' has content (like "Syntax Error"), append it to output
     if (stderr) {
       finalOutput += `\n--- Errors ---\n${stderr}`;
     }
-
-    // If 'error' exists (Execution crash/timeout), append that too
     if (error) {
       finalOutput += `\n--- System Error ---\n${error.message}`;
     }
