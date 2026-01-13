@@ -92,9 +92,8 @@ function shuntingYard(tokens) {
   return outputQueue;
 }
 
-// --- ASM GENERATOR ---
+// --- ASM GENERATOR (Now with Indentation) ---
 function generateComplexASM(expr, machineCodeOutput, getNextReg) {
-  // Unary Minus Hack
   expr = expr.replace(/^-\s*([a-zA-Z0-9]+)/, "0 - $1");
   expr = expr.replace(/\(-\s*([a-zA-Z0-9]+)/g, "(0 - $1");
 
@@ -106,48 +105,45 @@ function generateComplexASM(expr, machineCodeOutput, getNextReg) {
 
   rpn.forEach((token) => {
     if (!isNaN(parseInt(token))) {
-      // Immediate
       let val = parseInt(token);
       let reg = getNextReg();
-      asm += `DADDIU R${reg}, R0, #${val}\n`;
+      asm += `    DADDIU R${reg}, R0, #${val}\n`; // Indented
       let b = encodeIType(25, 0, reg, val);
       machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       regStack.push(reg);
     } else if (/^[a-zA-Z_]/.test(token)) {
-      // Variable
       let reg = getNextReg();
-      asm += `LD R${reg}, ${token}(R0)\n`;
+      asm += `    LD R${reg}, ${token}(R0)\n`; // Indented
       let b = encodeLD(reg, 0, 0);
       machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       regStack.push(reg);
     } else {
-      // Operator
       let rRight = regStack.pop();
       let rLeft = regStack.pop();
       let rRes = getNextReg();
 
       if (token === "+") {
-        asm += `DADDU R${rRes}, R${rLeft}, R${rRight}\n`;
+        asm += `    DADDU R${rRes}, R${rLeft}, R${rRight}\n`; // Indented
         let b = encodeRType(0, rLeft, rRight, rRes, 0, 45);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else if (token === "-") {
-        asm += `DSUBU R${rRes}, R${rLeft}, R${rRight}\n`;
+        asm += `    DSUBU R${rRes}, R${rLeft}, R${rRight}\n`; // Indented
         let b = encodeRType(0, rLeft, rRight, rRes, 0, 47);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else if (token === "*") {
-        asm += `DMULTU R${rLeft}, R${rRight}\n`;
+        asm += `    DMULTU R${rLeft}, R${rRight}\n`; // Indented
         let b = encodeRType(0, rLeft, rRight, 0, 0, 29);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-        asm += `MFLO R${rRes}\n`;
+        asm += `    MFLO R${rRes}\n`; // Indented
         let b2 = encodeRType(0, 0, 0, rRes, 0, 18);
         machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
       } else if (token === "/") {
-        asm += `DDIVU R${rLeft}, R${rRight}\n`;
+        asm += `    DDIVU R${rLeft}, R${rRight}\n`; // Indented
         let b = encodeRType(0, rLeft, rRight, 0, 0, 31);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-        asm += `MFLO R${rRes}\n`;
+        asm += `    MFLO R${rRes}\n`; // Indented
         let b2 = encodeRType(0, 0, 0, rRes, 0, 18);
         machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
       }
@@ -155,7 +151,6 @@ function generateComplexASM(expr, machineCodeOutput, getNextReg) {
     }
   });
 
-  // Return the generated code AND the register where the result lives
   return { asm: asm, reg: regStack.pop() };
 }
 
@@ -164,16 +159,13 @@ function generateEduMIPS(sourceCode) {
   const lines = sourceCode.split("\n");
   let dataSection = ".data\n";
   let codeSection = ".code\n";
-  // Version Marker
-  codeSection += "";
 
   let machineCodeOutput = { code: "" };
 
-  // Register Manager (Scoped locally to this function call)
   let tempRegCount = 0;
   const getNextReg = () => {
     tempRegCount++;
-    return tempRegCount; // Returns 1, 2, 3...
+    return tempRegCount;
   };
   const resetTemps = () => {
     tempRegCount = 0;
@@ -207,17 +199,17 @@ function generateEduMIPS(sourceCode) {
 
         if (!currentVar) {
           currentVar = token;
-          dataSection += `${currentVar}: .dword\n`;
+          dataSection += `    ${currentVar}: .dword\n`; // Indented
         } else {
           let val = parseInt(token);
           if (isNaN(val)) val = 0;
 
-          let reg = getNextReg(); // R1
-          codeSection += `DADDIU R${reg}, R0, #${val}\n`;
+          let reg = getNextReg();
+          codeSection += `    DADDIU R${reg}, R0, #${val}\n`; // Indented
           let bin1 = encodeIType(25, 0, reg, val);
           machineCodeOutput.code += `${bin1} (${binToHex(bin1)})\n`;
 
-          codeSection += `SD R${reg}, ${currentVar}(R0)\n`;
+          codeSection += `    SD R${reg}, ${currentVar}(R0)\n`; // Indented
           let bin2 = encodeSD(reg, 0, 0);
           machineCodeOutput.code += `${bin2} (${binToHex(bin2)})\n`;
 
@@ -225,7 +217,6 @@ function generateEduMIPS(sourceCode) {
         }
       }
     }
-
     // 2. ASSIGNMENTS
     else if (line.includes("=") && !line.startsWith("dsply")) {
       resetTemps();
@@ -234,30 +225,25 @@ function generateEduMIPS(sourceCode) {
       const expr = sides[1].trim();
 
       if (/[+\-*/]/.test(expr)) {
-        // Complex Math
         let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
-        codeSection += result.asm;
-
-        // DIRECT STORE (No extra moves)
-        codeSection += `SD R${result.reg}, ${target}(R0)\n`;
+        codeSection += result.asm; // Already indented
+        codeSection += `    SD R${result.reg}, ${target}(R0)\n`; // Indented
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        // Simple Assignment
         let val = parseInt(expr);
         if (!isNaN(val)) {
           let reg = getNextReg();
-          codeSection += `DADDIU R${reg}, R0, #${val}\n`;
+          codeSection += `    DADDIU R${reg}, R0, #${val}\n`; // Indented
           let b = encodeIType(25, 0, reg, val);
           machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-          codeSection += `SD R${reg}, ${target}(R0)\n`;
+          codeSection += `    SD R${reg}, ${target}(R0)\n`; // Indented
           let b2 = encodeSD(reg, 0, 0);
           machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
         }
       }
     }
-
     // 3. PRINTING
     else if (line.startsWith("dsply@")) {
       resetTemps();
@@ -265,11 +251,14 @@ function generateEduMIPS(sourceCode) {
 
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
-        codeSection += result.asm;
-        // Result is in result.reg. We leave it there.
+        codeSection += result.asm; // Already indented
+        if (result.reg !== 4) {
+          codeSection += `    DADDU R4, R${result.reg}, R0\n`; // Indented
+          let b = encodeRType(0, result.reg, 0, 4, 0, 45);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        }
       } else {
-        // Single Variable
-        codeSection += `LD R4, ${content}(R0)\n`; // Using R4 as convention for single vars
+        codeSection += `    LD R4, ${content}(R0)\n`; // Indented
         let b = encodeLD(4, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       }
@@ -284,7 +273,6 @@ app.post("/compile", (req, res) => {
   const code = req.body.code;
   const tempFile = path.join(__dirname, "temp_code.txt");
 
-  // 1. Generate eduMIPS Translations (Wrapped in Try-Catch for safety)
   let translations = { mips: "", binary: "" };
   try {
     translations = generateEduMIPS(code);
@@ -293,24 +281,13 @@ app.post("/compile", (req, res) => {
     translations.binary = "Error generating binary.";
   }
 
-  // 2. Run Actual Interpreter
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
-    // Cleanup temp file
     if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
 
-    // --- THE FIX IS HERE ---
     let finalOutput = stdout;
-
-    // If 'stderr' has content (like "Syntax Error"), append it to output
-    if (stderr) {
-      finalOutput += `\n--- Errors ---\n${stderr}`;
-    }
-
-    // If 'error' exists (Execution crash/timeout), append that too
-    if (error) {
-      finalOutput += `\n--- System Error ---\n${error.message}`;
-    }
+    if (stderr) finalOutput += `\n--- Errors ---\n${stderr}`;
+    if (error) finalOutput += `\n--- System Error ---\n${error.message}`;
 
     res.json({
       output: finalOutput || "No Output (Check your code)",
