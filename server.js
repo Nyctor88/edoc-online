@@ -20,11 +20,13 @@ function toBin(num, bits) {
   while (bin.length < bits) bin = "0" + bin;
   return bin.slice(-bits);
 }
+
 function binToHex(binStr) {
   let hex = parseInt(binStr, 2).toString(16).toUpperCase();
   while (hex.length < 8) hex = "0" + hex;
   return "0x" + hex;
 }
+
 function encodeRType(opcode, rs, rt, rd, shamt, funct) {
   return (
     toBin(opcode, 6) +
@@ -35,20 +37,25 @@ function encodeRType(opcode, rs, rt, rd, shamt, funct) {
     toBin(funct, 6)
   );
 }
+
 function encodeIType(opcode, rs, rt, imm) {
   return toBin(opcode, 6) + toBin(rs, 5) + toBin(rt, 5) + toBin(imm, 16);
 }
+
 function encodeLD(rt, base, offset) {
   return encodeIType(55, base, rt, offset);
 }
+
 function encodeSD(rt, base, offset) {
   return encodeIType(63, base, rt, offset);
 }
+
 // Opcode 40 (0x28) is SB (Store Byte)
 function encodeSB(rt, base, offset) {
   return encodeIType(40, base, rt, offset);
 }
-// Opcode 36 (0x24) is LBU (Load Byte Unsigned) - Used to read chars
+
+// Opcode 36 (0x24) is LBU (Load Byte Unsigned)
 function encodeLBU(rt, base, offset) {
   return encodeIType(36, base, rt, offset);
 }
@@ -163,7 +170,6 @@ function generateComplexASM(expr, machineCodeOutput, getNextReg) {
     }
   });
 
-  // Return the generated code AND the register where the result lives
   return { asm: asm, reg: regStack.pop() };
 }
 
@@ -206,7 +212,7 @@ function generateEduMIPS(sourceCode) {
     if (declMatch) {
       resetTemps();
       const isConst = declMatch[1] === "const";
-      // --- FIX #1: Use index 2 for the type ---
+      // Correct Index for type is 2
       const type = declMatch[2];
 
       const hasAssignment = line.includes("=");
@@ -225,6 +231,7 @@ function generateEduMIPS(sourceCode) {
         if (isConst) constantVars.add(varName);
         if (type === "char") charVars.add(varName);
 
+        // DATA
         if (type === "char") dataSection += `    ${varName}: .byte\n`;
         else dataSection += `    ${varName}: .dword\n`;
 
@@ -235,6 +242,7 @@ function generateEduMIPS(sourceCode) {
         );
         codeSection += result.asm;
 
+        // STORE
         if (type === "char") {
           codeSection += `    SB R${result.reg}, ${varName}(R0)\n`;
           let b = encodeSB(result.reg, 0, 0);
@@ -245,7 +253,7 @@ function generateEduMIPS(sourceCode) {
           machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
         }
       } else {
-        // --- FIX #2: Use index 2 here as well ---
+        // Simple Loop Declaration
         let cleanLine = line.replace(
           declMatch[0],
           `${declMatch[1]}.${declMatch[2]} `
@@ -390,11 +398,12 @@ function generateEduMIPS(sourceCode) {
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
+      } else {
+        // Silent for single variable print (No Assembly)
       }
-      // Single var is silent
     }
 
-    // 4. STRING PRINT
+    // 4. STRING PRINT / ERROR
     else if (line.startsWith("dsply")) {
       if (!line.includes('"')) {
         throw new Error(
@@ -418,19 +427,21 @@ app.post("/compile", (req, res) => {
 
   let translations;
 
-  // 1. Try to Transpile
+  // 1. Try to Transpile (MIPS Gen)
   try {
     translations = generateEduMIPS(code);
   } catch (err) {
-    // STOP EVERYTHING IF ERROR FOUND
+    // --- FAIL FAST ---
+    // If ANY error occurs during transpilation, STOP immediately.
+    // Send back the error and EMPTY MIPS/Binary strings.
     return res.json({
-      output: `Error: ${err.message}`, // The clean error message
-      mips: "", // Hide MIPS
-      binary: "", // Hide Binary
+      output: `Error: ${err.message}`,
+      mips: "",
+      binary: "",
     });
   }
 
-  // 2. If Transpilation Succeeded, Run Actual Interpreter
+  // 2. Only if Transpilation Succeeded, Run Actual Interpreter
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
     // Cleanup temp file
