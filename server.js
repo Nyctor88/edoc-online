@@ -175,7 +175,7 @@ function generateEduMIPS(sourceCode) {
 
   let machineCodeOutput = { code: "" };
   const constantVars = new Set();
-  const charVars = new Set(); // Track which vars are characters
+  const charVars = new Set();
 
   // Register Manager
   let tempRegCount = 0;
@@ -206,14 +206,14 @@ function generateEduMIPS(sourceCode) {
     if (declMatch) {
       resetTemps();
       const isConst = declMatch[1] === "const";
-      const type = declMatch[3]; // "int", "float", or "char"
+      // --- FIX #1: Use index 2 for the type ---
+      const type = declMatch[2];
 
       const hasAssignment = line.includes("=");
       const rightSide = hasAssignment ? line.split("=")[1].trim() : "";
       const isComplex = hasAssignment && /[+\-*/]/.test(rightSide);
 
       if (isComplex) {
-        // --- COMPLEX DECLARATION (e.g. var.int a = b + 1) ---
         const leftSide = line.split("=")[0].trim();
         const prefix = leftSide.match(
           /^(var|const)\s*\.\s*(int|float|char)\s+/
@@ -225,11 +225,9 @@ function generateEduMIPS(sourceCode) {
         if (isConst) constantVars.add(varName);
         if (type === "char") charVars.add(varName);
 
-        // Data Section
         if (type === "char") dataSection += `    ${varName}: .byte\n`;
         else dataSection += `    ${varName}: .dword\n`;
 
-        // Generate Math ASM
         let result = generateComplexASM(
           rightSide,
           machineCodeOutput,
@@ -237,7 +235,6 @@ function generateEduMIPS(sourceCode) {
         );
         codeSection += result.asm;
 
-        // Store Result
         if (type === "char") {
           codeSection += `    SB R${result.reg}, ${varName}(R0)\n`;
           let b = encodeSB(result.reg, 0, 0);
@@ -248,14 +245,12 @@ function generateEduMIPS(sourceCode) {
           machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
         }
       } else {
-        // --- SIMPLE DECLARATION LOOP (e.g. var.char mid = "D") ---
-        // Normalize "var . char" to "var.char" for easier splitting
+        // --- FIX #2: Use index 2 here as well ---
         let cleanLine = line.replace(
           declMatch[0],
-          `${declMatch[1]}.${declMatch[3]} `
+          `${declMatch[1]}.${declMatch[2]} `
         );
 
-        // Remove commas, replace = with space, then split
         const parts = cleanLine
           .replace(/,/g, " ")
           .replace(/=/g, " ")
@@ -264,12 +259,10 @@ function generateEduMIPS(sourceCode) {
 
         for (let i = 0; i < parts.length; i++) {
           let token = parts[i];
-          // Skip keywords
           if (/^(var|const)\.(int|float|char)$/.test(token) || token === "")
             continue;
 
           if (!currentVar) {
-            // Found Variable Name
             currentVar = token;
             if (isConst) constantVars.add(currentVar);
             if (type === "char") charVars.add(currentVar);
@@ -277,7 +270,6 @@ function generateEduMIPS(sourceCode) {
             if (type === "char") dataSection += `    ${currentVar}: .byte\n`;
             else dataSection += `    ${currentVar}: .dword\n`;
           } else {
-            // Found Value
             let val;
             if (
               (token.startsWith('"') && token.endsWith('"')) ||
@@ -299,13 +291,12 @@ function generateEduMIPS(sourceCode) {
             let b = encodeIType(25, 0, reg, val);
             machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-            // Store Instruction
             if (charVars.has(currentVar)) {
-              codeSection += `    SB R${reg}, ${currentVar}(R0)\n`; // SB for char
+              codeSection += `    SB R${reg}, ${currentVar}(R0)\n`;
               let b2 = encodeSB(reg, 0, 0);
               machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
             } else {
-              codeSection += `    SD R${reg}, ${currentVar}(R0)\n`; // SD for int/float
+              codeSection += `    SD R${reg}, ${currentVar}(R0)\n`;
               let b2 = encodeSD(reg, 0, 0);
               machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
             }
@@ -383,7 +374,7 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING (dsply@)
+    // 3. PRINTING
     else if (line.startsWith("dsply@")) {
       resetTemps();
       let match = line.match(/\[(.*?)\]/);
@@ -397,14 +388,13 @@ function generateEduMIPS(sourceCode) {
       let content = match[1].trim();
 
       if (/[+\-*/]/.test(content)) {
-        // Has operators -> Generate Complex Math ASM
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
       }
-      // Else -> Single Variable -> DO NOTHING (SILENT)
+      // Single var is silent
     }
 
-    // 4. STRING PRINT / ERROR
+    // 4. STRING PRINT
     else if (line.startsWith("dsply")) {
       if (!line.includes('"')) {
         throw new Error(
