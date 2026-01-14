@@ -44,6 +44,14 @@ function encodeLD(rt, base, offset) {
 function encodeSD(rt, base, offset) {
   return encodeIType(63, base, rt, offset);
 }
+// Opcode 40 (0x28) is SB (Store Byte)
+function encodeSB(rt, base, offset) {
+  return encodeIType(40, base, rt, offset);
+}
+// Opcode 36 (0x24) is LBU (Load Byte Unsigned) - Used to read chars
+function encodeLBU(rt, base, offset) {
+  return encodeIType(36, base, rt, offset);
+}
 
 // --- EXPRESSION PARSER (Shunting-Yard) ---
 function tokenize(expr) {
@@ -167,6 +175,7 @@ function generateEduMIPS(sourceCode) {
 
   let machineCodeOutput = { code: "" };
   const constantVars = new Set();
+  const charVars = new Set(); // <--- NEW: Track char variables
 
   // Register Manager
   let tempRegCount = 0;
@@ -197,6 +206,7 @@ function generateEduMIPS(sourceCode) {
     if (declMatch) {
       resetTemps();
       const isConst = declMatch[1] === "const";
+      const type = declMatch[3]; // "int", "float", or "char"
 
       const hasAssignment = line.includes("=");
       const rightSide = hasAssignment ? line.split("=")[1].trim() : "";
@@ -212,24 +222,38 @@ function generateEduMIPS(sourceCode) {
         if (!varName)
           throw new Error(`Line ${lineNum}: Missing variable name.`);
         if (isConst) constantVars.add(varName);
+        if (type === "char") charVars.add(varName); // Track Type
 
-        dataSection += `    ${varName}: .dword\n`;
+        // --- DATA SECTION ---
+        if (type === "char") {
+          dataSection += `    ${varName}: .byte\n`; // Use .byte for chars
+        } else {
+          dataSection += `    ${varName}: .dword\n`;
+        }
+
         let result = generateComplexASM(
           rightSide,
           machineCodeOutput,
           getNextReg
         );
         codeSection += result.asm;
-        codeSection += `    SD R${result.reg}, ${varName}(R0)\n`;
-        let b = encodeSD(result.reg, 0, 0);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+
+        // --- STORE INSTRUCTION ---
+        if (type === "char") {
+          codeSection += `    SB R${result.reg}, ${varName}(R0)\n`; // SB for char
+          let b = encodeSB(result.reg, 0, 0);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        } else {
+          codeSection += `    SD R${result.reg}, ${varName}(R0)\n`;
+          let b = encodeSD(result.reg, 0, 0);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        }
       } else {
-        // --- SIMPLE DECLARATION LOOP ---
+        // Simple Loop Declaration
         let cleanLine = line.replace(
           declMatch[0],
           `${declMatch[1]}.${declMatch[2]} `
         );
-        // Remove commas, replace = with space, then split.
         const parts = cleanLine
           .replace(/,/g, " ")
           .replace(/=/g, " ")
@@ -244,18 +268,24 @@ function generateEduMIPS(sourceCode) {
           if (!currentVar) {
             currentVar = token;
             if (isConst) constantVars.add(currentVar);
-            dataSection += `    ${currentVar}: .dword\n`;
+            if (type === "char") charVars.add(currentVar); // Track Type
+
+            // --- DATA SECTION ---
+            if (type === "char") {
+              dataSection += `    ${currentVar}: .byte\n`;
+            } else {
+              dataSection += `    ${currentVar}: .dword\n`;
+            }
           } else {
+            // Value parsing
             let val;
             if (
               (token.startsWith('"') && token.endsWith('"')) ||
               (token.startsWith("'") && token.endsWith("'"))
             ) {
-              // Strip quotes and get ASCII value of first character
               let cleanChar = token.substring(1, token.length - 1);
               val = cleanChar.charCodeAt(0);
             } else {
-              // Parse as number
               val = parseInt(token);
             }
 
@@ -269,9 +299,16 @@ function generateEduMIPS(sourceCode) {
             let b = encodeIType(25, 0, reg, val);
             machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-            codeSection += `    SD R${reg}, ${currentVar}(R0)\n`;
-            let b2 = encodeSD(reg, 0, 0);
-            machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+            // --- STORE INSTRUCTION ---
+            if (charVars.has(currentVar)) {
+              codeSection += `    SB R${reg}, ${currentVar}(R0)\n`; // SB
+              let b2 = encodeSB(reg, 0, 0);
+              machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+            } else {
+              codeSection += `    SD R${reg}, ${currentVar}(R0)\n`; // SD
+              let b2 = encodeSD(reg, 0, 0);
+              machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+            }
             currentVar = null;
           }
         }
@@ -303,11 +340,18 @@ function generateEduMIPS(sourceCode) {
       if (/[+\-*/]/.test(expr)) {
         let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
         codeSection += result.asm;
-        codeSection += `    SD R${result.reg}, ${target}(R0)\n`;
-        let b = encodeSD(result.reg, 0, 0);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+
+        // --- STORE INSTRUCTION ---
+        if (charVars.has(target)) {
+          codeSection += `    SB R${result.reg}, ${target}(R0)\n`;
+          let b = encodeSB(result.reg, 0, 0);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        } else {
+          codeSection += `    SD R${result.reg}, ${target}(R0)\n`;
+          let b = encodeSD(result.reg, 0, 0);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        }
       } else {
-        // --- FIX: Assignment also needs to handle Chars ---
         let val;
         expr = expr.trim();
         if (
@@ -327,13 +371,21 @@ function generateEduMIPS(sourceCode) {
         codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
         let b = encodeIType(25, 0, reg, val);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-        codeSection += `    SD R${reg}, ${target}(R0)\n`;
-        let b2 = encodeSD(reg, 0, 0);
-        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+
+        // --- STORE INSTRUCTION ---
+        if (charVars.has(target)) {
+          codeSection += `    SB R${reg}, ${target}(R0)\n`;
+          let b2 = encodeSB(reg, 0, 0);
+          machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+        } else {
+          codeSection += `    SD R${reg}, ${target}(R0)\n`;
+          let b2 = encodeSD(reg, 0, 0);
+          machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
+        }
       }
     }
 
-    // 3. PRINTING (Strict dsply@ for variables)
+    // 3. PRINTING
     else if (line.startsWith("dsply@")) {
       resetTemps();
       let match = line.match(/\[(.*?)\]/);
@@ -349,23 +401,29 @@ function generateEduMIPS(sourceCode) {
       if (/[+\-*/]/.test(content)) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
+      } else {
+        // --- LOAD INSTRUCTION ---
+        // If it's a simple variable, we need to know if we should Load Byte or Load Double
+        if (charVars.has(content)) {
+          codeSection += `    LBU R4, ${content}(R0)\n`; // Load Byte Unsigned
+          let b = encodeLBU(4, 0, 0);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        } else {
+          codeSection += `    LD R4, ${content}(R0)\n`; // Load Double
+          let b = encodeLD(4, 0, 0);
+          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+        }
       }
-      // Single variable silent logic
     }
 
-    // 4. PRINTING STRINGS vs WRONG SYNTAX
+    // 4. STRING PRINT / ERROR
     else if (line.startsWith("dsply")) {
-      if (line.includes('"')) {
-        // String literal -> Do nothing
-      } else {
+      if (!line.includes('"')) {
         throw new Error(
           `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
         );
       }
-    }
-
-    // 5. UNKNOWN SYNTAX
-    else {
+    } else {
       throw new Error(
         `Syntax Error on line ${lineNum}: Unknown statement "${line}".`
       );
@@ -374,7 +432,6 @@ function generateEduMIPS(sourceCode) {
 
   return { mips: dataSection + codeSection, binary: machineCodeOutput.code };
 }
-
 // --- API ENDPOINT ---
 app.post("/compile", (req, res) => {
   const code = req.body.code;
