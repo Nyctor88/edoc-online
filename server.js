@@ -175,7 +175,7 @@ function generateEduMIPS(sourceCode) {
 
   let machineCodeOutput = { code: "" };
   const constantVars = new Set();
-  const charVars = new Set(); // <--- NEW: Track char variables
+  const charVars = new Set(); // Track which vars are characters
 
   // Register Manager
   let tempRegCount = 0;
@@ -213,6 +213,7 @@ function generateEduMIPS(sourceCode) {
       const isComplex = hasAssignment && /[+\-*/]/.test(rightSide);
 
       if (isComplex) {
+        // --- COMPLEX DECLARATION (e.g. var.int a = b + 1) ---
         const leftSide = line.split("=")[0].trim();
         const prefix = leftSide.match(
           /^(var|const)\s*\.\s*(int|float|char)\s+/
@@ -222,15 +223,13 @@ function generateEduMIPS(sourceCode) {
         if (!varName)
           throw new Error(`Line ${lineNum}: Missing variable name.`);
         if (isConst) constantVars.add(varName);
-        if (type === "char") charVars.add(varName); // Track Type
+        if (type === "char") charVars.add(varName);
 
-        // --- DATA SECTION ---
-        if (type === "char") {
-          dataSection += `    ${varName}: .byte\n`; // Use .byte for chars
-        } else {
-          dataSection += `    ${varName}: .dword\n`;
-        }
+        // Data Section
+        if (type === "char") dataSection += `    ${varName}: .byte\n`;
+        else dataSection += `    ${varName}: .dword\n`;
 
+        // Generate Math ASM
         let result = generateComplexASM(
           rightSide,
           machineCodeOutput,
@@ -238,9 +237,9 @@ function generateEduMIPS(sourceCode) {
         );
         codeSection += result.asm;
 
-        // --- STORE INSTRUCTION ---
+        // Store Result
         if (type === "char") {
-          codeSection += `    SB R${result.reg}, ${varName}(R0)\n`; // SB for char
+          codeSection += `    SB R${result.reg}, ${varName}(R0)\n`;
           let b = encodeSB(result.reg, 0, 0);
           machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
         } else {
@@ -249,11 +248,14 @@ function generateEduMIPS(sourceCode) {
           machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
         }
       } else {
-        // Simple Loop Declaration
+        // --- SIMPLE DECLARATION LOOP (e.g. var.char mid = "D") ---
+        // Normalize "var . char" to "var.char" for easier splitting
         let cleanLine = line.replace(
           declMatch[0],
-          `${declMatch[1]}.${declMatch[2]} `
+          `${declMatch[1]}.${declMatch[3]} `
         );
+
+        // Remove commas, replace = with space, then split
         const parts = cleanLine
           .replace(/,/g, " ")
           .replace(/=/g, " ")
@@ -262,22 +264,20 @@ function generateEduMIPS(sourceCode) {
 
         for (let i = 0; i < parts.length; i++) {
           let token = parts[i];
+          // Skip keywords
           if (/^(var|const)\.(int|float|char)$/.test(token) || token === "")
             continue;
 
           if (!currentVar) {
+            // Found Variable Name
             currentVar = token;
             if (isConst) constantVars.add(currentVar);
-            if (type === "char") charVars.add(currentVar); // Track Type
+            if (type === "char") charVars.add(currentVar);
 
-            // --- DATA SECTION ---
-            if (type === "char") {
-              dataSection += `    ${currentVar}: .byte\n`;
-            } else {
-              dataSection += `    ${currentVar}: .dword\n`;
-            }
+            if (type === "char") dataSection += `    ${currentVar}: .byte\n`;
+            else dataSection += `    ${currentVar}: .dword\n`;
           } else {
-            // Value parsing
+            // Found Value
             let val;
             if (
               (token.startsWith('"') && token.endsWith('"')) ||
@@ -299,13 +299,13 @@ function generateEduMIPS(sourceCode) {
             let b = encodeIType(25, 0, reg, val);
             machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-            // --- STORE INSTRUCTION ---
+            // Store Instruction
             if (charVars.has(currentVar)) {
-              codeSection += `    SB R${reg}, ${currentVar}(R0)\n`; // SB
+              codeSection += `    SB R${reg}, ${currentVar}(R0)\n`; // SB for char
               let b2 = encodeSB(reg, 0, 0);
               machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
             } else {
-              codeSection += `    SD R${reg}, ${currentVar}(R0)\n`; // SD
+              codeSection += `    SD R${reg}, ${currentVar}(R0)\n`; // SD for int/float
               let b2 = encodeSD(reg, 0, 0);
               machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
             }
@@ -341,7 +341,6 @@ function generateEduMIPS(sourceCode) {
         let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
         codeSection += result.asm;
 
-        // --- STORE INSTRUCTION ---
         if (charVars.has(target)) {
           codeSection += `    SB R${result.reg}, ${target}(R0)\n`;
           let b = encodeSB(result.reg, 0, 0);
@@ -372,7 +371,6 @@ function generateEduMIPS(sourceCode) {
         let b = encodeIType(25, 0, reg, val);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
 
-        // --- STORE INSTRUCTION ---
         if (charVars.has(target)) {
           codeSection += `    SB R${reg}, ${target}(R0)\n`;
           let b2 = encodeSB(reg, 0, 0);
@@ -385,7 +383,7 @@ function generateEduMIPS(sourceCode) {
       }
     }
 
-    // 3. PRINTING
+    // 3. PRINTING (dsply@)
     else if (line.startsWith("dsply@")) {
       resetTemps();
       let match = line.match(/\[(.*?)\]/);
@@ -399,21 +397,11 @@ function generateEduMIPS(sourceCode) {
       let content = match[1].trim();
 
       if (/[+\-*/]/.test(content)) {
+        // Has operators -> Generate Complex Math ASM
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
-      } else {
-        // --- LOAD INSTRUCTION ---
-        // If it's a simple variable, we need to know if we should Load Byte or Load Double
-        if (charVars.has(content)) {
-          codeSection += `    LBU R4, ${content}(R0)\n`; // Load Byte Unsigned
-          let b = encodeLBU(4, 0, 0);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-        } else {
-          codeSection += `    LD R4, ${content}(R0)\n`; // Load Double
-          let b = encodeLD(4, 0, 0);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-        }
       }
+      // Else -> Single Variable -> DO NOTHING (SILENT)
     }
 
     // 4. STRING PRINT / ERROR
@@ -432,6 +420,7 @@ function generateEduMIPS(sourceCode) {
 
   return { mips: dataSection + codeSection, binary: machineCodeOutput.code };
 }
+
 // --- API ENDPOINT ---
 app.post("/compile", (req, res) => {
   const code = req.body.code;
