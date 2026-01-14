@@ -6,18 +6,18 @@
 void yyerror(const char *s);
 int yylex();
 
-/* --- SYMBOL TABLE (Local to Parser) --- */
+/* --- SYMBOL TABLE --- */
 struct Symbol {
     char *name;
     int type;     // 0=INT, 1=FLOAT, 2=CHAR
     float val; 
-    int is_const; // 1=Constant (Immutable), 0=Variable
+    int is_const; // 1=Constant, 0=Variable
 };
 
 struct Symbol sym_table[100];
 int sym_count = 0;
 
-/* Globals to track current declaration state */
+/* Globals for declaration state */
 int current_data_type = 0;
 int current_is_const = 0; 
 
@@ -51,7 +51,7 @@ struct Symbol* get_symbol(char *name) {
 }
 %}
 
-/* --- EXPOSE DATA STRUCT TO HEADER --- */
+/* --- DATA STRUCTURES --- */
 %code requires {
     typedef struct {
         float val;
@@ -97,7 +97,7 @@ statement:
     | assignment
     ;
 
-/* --- PRINT RULES --- */
+/* --- PRINT RULES (Matches JS Logic) --- */
 print_statement:
     /* Rule 1: TEXT ONLY using "dsply" */
     DSPLY LBRACKET STRING_LITERAL RBRACKET newline_flag {
@@ -108,16 +108,13 @@ print_statement:
         if($5 == 1) printf("\n");
         if($5 == 2) printf("\n\n");
     }
-    /* Rule 2: VARIABLES/MATH ONLY using "dsply@" */
+    /* Rule 2: VARIABLES/EXPR ONLY using "dsply@" */
     | DSPLY_AT LBRACKET expression RBRACKET newline_flag {
         if($3.type == 2) { 
-            /* CHAR type */
             printf("%c", (int)$3.val);
         } else if ($3.type == 0) { 
-            /* INT type - print with %d */
             printf("%d", (int)$3.val);
         } else {
-            /* FLOAT type */
             printf("%.2f", $3.val);
         }
         
@@ -132,8 +129,9 @@ newline_flag:
     | /* empty */ { $$ = 0; }
     ;
 
+/* --- DECLARATION (Handles "var.int" and "var . int") --- */
 declaration:
-    VAR DOT     { current_is_const = 0; } type decl_list
+    VAR DOT      { current_is_const = 0; } type decl_list
     | CONST DOT { current_is_const = 1; } type decl_list
     ;
 
@@ -158,11 +156,13 @@ decl_item:
     }
     | IDENT ASSIGN STRING_LITERAL {
         add_symbol($1, 2); 
+        /* Basic char extraction from string "c" */
         if(strlen($3) >= 3) update_symbol($1, (float)$3[1]);
         else update_symbol($1, 0);
     }
     ;
 
+/* --- ASSIGNMENT (Includes +=, -=, etc) --- */
 assignment:
     IDENT ASSIGN expression { 
         struct Symbol* s = get_symbol($1);
@@ -181,6 +181,7 @@ assignment:
             }
         }
     }
+    /* Compound Assignments */
     | IDENT ADD_ASSIGN expression { 
         struct Symbol* s = get_symbol($1);
         if(s) {
@@ -210,8 +211,6 @@ assignment:
         }
     }
     ;
-
-/* --- MATH LOGIC WITH TYPE PROPAGATION --- */
 
 expression:
     term                  { $$ = $1; }

@@ -11,16 +11,21 @@ void yyerror(const char *s);
 
 %%
 
+ /* --- KEYWORDS --- */
 "boot"      { return BOOT; }
 "end"       { return END; }
-"dsply@"    { return DSPLY_AT; } /* Re-introduced for Variables */
-"dsply"     { return DSPLY; }    /* strictly for Strings */
+
+/* ORDER MATTERS: Longest match rules apply, but listing dsply@ first is safer */
+"dsply@"    { return DSPLY_AT; } 
+"dsply"     { return DSPLY; }    
+
 "var"       { return VAR; }
 "const"     { return CONST; }
 "int"       { return TYPE_INT; }
 "float"     { return TYPE_FLOAT; }
 "char"      { return TYPE_CHAR; }
 
+ /* --- SYMBOLS --- */
 "!!"        { return DBL_BANG; }
 "!"         { return BANG; }
 "."         { return DOT; }
@@ -30,6 +35,7 @@ void yyerror(const char *s);
 "("         { return LPAREN; }
 ")"         { return RPAREN; }
 
+ /* --- OPERATORS --- */
 "+="        { return ADD_ASSIGN; }
 "-="        { return SUB_ASSIGN; }
 "*="        { return MUL_ASSIGN; }
@@ -40,6 +46,7 @@ void yyerror(const char *s);
 "*"         { return MULT; }
 "/"         { return DIV; }
 
+ /* --- LITERALS --- */
 \"[^"\n]*\" {
     yylval.strVal = strdup(yytext);
     return STRING_LITERAL;
@@ -53,7 +60,9 @@ void yyerror(const char *s);
     return IDENT;
 }
 
-#.* { /* Ignore comments */ }
+ /* --- EXTRAS --- */
+#.* { /* Ignore Hash comments */ }
+"//".* { /* Ignore Slash comments (Added to match JS) */ }
 
 [ \t\r\n]   { /* Ignore whitespace */ }
 
