@@ -224,10 +224,12 @@ function generateEduMIPS(sourceCode) {
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
+        // --- SIMPLE DECLARATION LOOP ---
         let cleanLine = line.replace(
           declMatch[0],
           `${declMatch[1]}.${declMatch[2]} `
         );
+        // Remove commas, replace = with space, then split.
         const parts = cleanLine
           .replace(/,/g, " ")
           .replace(/=/g, " ")
@@ -244,7 +246,19 @@ function generateEduMIPS(sourceCode) {
             if (isConst) constantVars.add(currentVar);
             dataSection += `    ${currentVar}: .dword\n`;
           } else {
-            let val = parseInt(token);
+            let val;
+            if (
+              (token.startsWith('"') && token.endsWith('"')) ||
+              (token.startsWith("'") && token.endsWith("'"))
+            ) {
+              // Strip quotes and get ASCII value of first character
+              let cleanChar = token.substring(1, token.length - 1);
+              val = cleanChar.charCodeAt(0);
+            } else {
+              // Parse as number
+              val = parseInt(token);
+            }
+
             if (isNaN(val))
               throw new Error(
                 `Line ${lineNum}: Invalid value assigned to '${currentVar}'.`
@@ -293,7 +307,19 @@ function generateEduMIPS(sourceCode) {
         let b = encodeSD(result.reg, 0, 0);
         machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
       } else {
-        let val = parseInt(expr);
+        // --- FIX: Assignment also needs to handle Chars ---
+        let val;
+        expr = expr.trim();
+        if (
+          (expr.startsWith('"') && expr.endsWith('"')) ||
+          (expr.startsWith("'") && expr.endsWith("'"))
+        ) {
+          let cleanChar = expr.substring(1, expr.length - 1);
+          val = cleanChar.charCodeAt(0);
+        } else {
+          val = parseInt(expr);
+        }
+
         if (isNaN(val))
           throw new Error(`Line ${lineNum}: Invalid assignment value.`);
 
@@ -324,13 +350,13 @@ function generateEduMIPS(sourceCode) {
         let result = generateComplexASM(content, machineCodeOutput, getNextReg);
         codeSection += result.asm;
       }
-      // Single variables generate NO assembly (silent)
+      // Single variable silent logic
     }
 
     // 4. PRINTING STRINGS vs WRONG SYNTAX
     else if (line.startsWith("dsply")) {
       if (line.includes('"')) {
-        // String literal -> Do nothing in Assembly panel (Silent pass-through)
+        // String literal -> Do nothing
       } else {
         throw new Error(
           `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
