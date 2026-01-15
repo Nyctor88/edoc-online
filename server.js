@@ -15,16 +15,16 @@ const isWindows = process.platform === "win32";
 const COMPILER_PATH = path.join(__dirname, isWindows ? "edoc.exe" : "edoc");
 
 // =============================================================
-//  PART 1: CONSTANTS & TOKEN DEFINITIONS (Inspired by C Enums)
+//  PART 1: CONSTANTS & TOKEN DEFINITIONS
 // =============================================================
 const TokenType = {
   KEYWORD: "KEYWORD",
   VARIABLE: "VARIABLE",
   INTEGER: "INTEGER",
-  CHAR_LITERAL: "CHAR_LITERAL", // Added for your current project
+  CHAR_LITERAL: "CHAR_LITERAL",
   OPERATOR: "OPERATOR",
   DELIMITER: "DELIMITER",
-  STRING_LITERAL: "STRING_LITERAL", // For dsply ["text"]
+  STRING_LITERAL: "STRING_LITERAL",
   UNKNOWN: "UNKNOWN",
 };
 
@@ -57,13 +57,12 @@ function binToHex(binStr) {
 
 // =============================================================
 //  PART 3: THE COMPILER SIMULATOR CLASS
-//  (Encapsulates Symbol Table, Tokenizer, Parser, CodeGen)
 // =============================================================
 class CompilerSimulator {
   constructor() {
     this.tokens = [];
     this.pos = 0;
-    this.symbolTable = []; // Array of { name, type, addr, isConst }
+    this.symbolTable = [];
     this.currentAddr = 0;
     this.dataSection = ".data\n";
     this.codeSection = ".code\n";
@@ -71,25 +70,19 @@ class CompilerSimulator {
     this.tempRegCount = 0;
   }
 
-  // --- 3.1: SYMBOL TABLE HELPERS ---
+  // --- SYMBOL TABLE ---
   addSymbol(name, type, isConst) {
     if (this.findSymbol(name)) {
       throw new Error(`Redeclaration of variable '${name}'`);
     }
 
     let addr = this.currentAddr;
-    // In your C code, you incremented by 8 (dword).
-    // For this project, we do 8 for ints/floats, 1 for char (optional, but sticking to 8 aligns memory easier)
-    // Let's stick to your previous .byte logic for chars though to match MIPS logic.
     let size = type === "char" ? 1 : 8;
 
     this.symbolTable.push({ name, type, addr, isConst });
 
-    // Update Data Section String
     let directive = type === "char" ? ".byte" : ".dword";
-    this.dataSection += `    ${name}: ${directive}\n`; // Address info could be added as comment
-
-    // MIPS often aligns data, but for simulation we just increment
+    this.dataSection += `    ${name}: ${directive}\n`;
     this.currentAddr += size;
   }
 
@@ -106,13 +99,12 @@ class CompilerSimulator {
     this.tempRegCount = 0;
   }
 
-  // --- 3.2: MACHINE CODE WRITER (Ported from C) ---
+  // --- MACHINE CODE WRITER ---
   emitInstruction(instr, rd, rs, rt, imm, asm_instr, comment) {
     let opcode = 0,
       funct = 0,
       machine = 0;
 
-    // Map instructions to OpCodes (Matching your C structure)
     if (instr === "DADDIU") {
       opcode = 0b011001;
       machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
@@ -142,13 +134,11 @@ class CompilerSimulator {
       opcode = 0b000000;
       funct = 0b010010;
       machine = (opcode << 26) | (0 << 21) | (0 << 16) | (rd << 11) | funct;
-    }
-    // Added for your current project (Char support)
-    else if (instr === "SB") {
-      opcode = 0b101000; // 0x28
+    } else if (instr === "SB") {
+      opcode = 0b101000;
       machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
     } else if (instr === "LBU") {
-      opcode = 0b100100; // 0x24
+      opcode = 0b100100;
       machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
     }
 
@@ -159,7 +149,7 @@ class CompilerSimulator {
     this.binaryOutput += `${binStr} (${hexStr})\n`;
   }
 
-  // --- 3.3: TOKENIZER (Loop-based, replacing regex split) ---
+  // --- TOKENIZER ---
   tokenize(source) {
     let i = 0;
     const length = source.length;
@@ -168,21 +158,17 @@ class CompilerSimulator {
     while (i < length) {
       let char = source[i];
 
-      // Skip Whitespace
       if (/\s/.test(char)) {
         i++;
         continue;
       }
 
-      // Comments (// or #)
       if (char === "#" || (char === "/" && source[i + 1] === "/")) {
         while (i < length && source[i] !== "\n") i++;
         continue;
       }
 
-      // Operators & Delimiters
       if ("=+-*/(),.;[]!".includes(char)) {
-        // Check for compound operators +=, -=, etc.
         if ("+-*/".includes(char) && source[i + 1] === "=") {
           this.tokens.push({ type: TokenType.OPERATOR, value: char + "=" });
           i += 2;
@@ -199,13 +185,11 @@ class CompilerSimulator {
         continue;
       }
 
-      // Strings "text"
       if (char === '"') {
         let start = ++i;
         while (i < length && source[i] !== '"') i++;
         let val = source.slice(start, i);
-        i++; // skip closing quote
-        // Logic: Is it a char "D" or string "Hello"?
+        i++;
         if (val.length === 1) {
           this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val });
         } else {
@@ -213,7 +197,7 @@ class CompilerSimulator {
         }
         continue;
       }
-      // Single quotes 'D'
+
       if (char === "'") {
         let start = ++i;
         while (i < length && source[i] !== "'") i++;
@@ -223,14 +207,12 @@ class CompilerSimulator {
         continue;
       }
 
-      // Identifiers & Keywords
+      // --- FIX: Include '@' in Identifier Regex ---
       if (/[a-zA-Z_]/.test(char)) {
         let start = i;
-        while (i < length && /[a-zA-Z0-9_]/.test(source[i])) i++;
+        // Added '@' to this character class so "dsply@" is captured as one token
+        while (i < length && /[a-zA-Z0-9_@]/.test(source[i])) i++;
         let val = source.slice(start, i);
-
-        // Handle "var.int" logic (your flexible requirement)
-        // If previous token was 'var' or 'const' and current is 'int', we treat as keyword sequence
 
         if (
           KEYWORDS.includes(val) ||
@@ -245,7 +227,6 @@ class CompilerSimulator {
         continue;
       }
 
-      // Numbers
       if (/[0-9]/.test(char)) {
         let start = i;
         while (i < length && /[0-9]/.test(source[i])) i++;
@@ -254,13 +235,11 @@ class CompilerSimulator {
         continue;
       }
 
-      i++; // Skip unknown
+      i++;
     }
   }
 
-  // --- 3.4: RECURSIVE DESCENT PARSER (Structure from C) ---
-
-  // Helpers to consume tokens
+  // --- PARSER ---
   match(type, value) {
     if (this.pos < this.tokens.length) {
       let t = this.tokens[this.pos];
@@ -276,7 +255,6 @@ class CompilerSimulator {
     return this.tokens[this.pos];
   }
 
-  // Main Entry Point
   parse() {
     while (this.pos < this.tokens.length) {
       let t = this.peek();
@@ -297,20 +275,18 @@ class CompilerSimulator {
       } else if (t.value === "dsply" || t.value === "dsply@") {
         this.parsePrint();
       } else {
-        this.pos++; // Skip unknown/delimiters
+        this.pos++;
       }
     }
   }
 
   parseDeclaration() {
-    // Format: var . type name = val
     this.resetTempRegs();
-    let scope = this.tokens[this.pos++].value; // var or const
+    let scope = this.tokens[this.pos++].value;
 
-    // Skip dots/spaces until type
     while (this.peek().value === ".") this.pos++;
 
-    let typeToken = this.match(TokenType.KEYWORD); // int/float/char
+    let typeToken = this.match(TokenType.KEYWORD);
     if (!typeToken) throw new Error("Expected type after declaration");
     let type = typeToken.value;
 
@@ -318,18 +294,12 @@ class CompilerSimulator {
     if (!nameToken) throw new Error("Expected variable name");
     let name = nameToken.value;
 
-    // Add to Symbol Table
     let isConst = scope === "const";
     this.addSymbol(name, type, isConst);
 
-    // Check for Assignment
     if (this.match(TokenType.OPERATOR, "=")) {
-      // Parse the RHS expression
       let reg = this.parseExpression();
-
-      // Generate Store Instruction
       if (type === "char") {
-        // SB (Store Byte)
         let regNum = parseInt(reg.substring(1));
         this.emitInstruction(
           "SB",
@@ -341,7 +311,6 @@ class CompilerSimulator {
           `init ${name}`
         );
       } else {
-        // SD (Store Double)
         let regNum = parseInt(reg.substring(1));
         this.emitInstruction(
           "SD",
@@ -366,9 +335,9 @@ class CompilerSimulator {
     if (sym.isConst) throw new Error(`Cannot reassign constant '${name}'`);
 
     let opToken = this.match(TokenType.OPERATOR);
-    if (!opToken) return; // Weird state
+    if (!opToken) return;
 
-    let op = opToken.value; // =, +=, -= ...
+    let op = opToken.value;
 
     if (op === "=") {
       let reg = this.parseExpression();
@@ -396,8 +365,6 @@ class CompilerSimulator {
         );
       }
     } else {
-      // Compound (+=, etc) logic: Load, Op, Store
-      // 1. Load current val
       let loadReg = this.getTempReg();
       let loadRegNum = parseInt(loadReg.substring(1));
       if (sym.type === "char") {
@@ -422,15 +389,13 @@ class CompilerSimulator {
         );
       }
 
-      // 2. Parse RHS
       let rhsReg = this.parseExpression();
       let rhsRegNum = parseInt(rhsReg.substring(1));
 
-      // 3. Perform Op
       let resReg = this.getTempReg();
       let resRegNum = parseInt(resReg.substring(1));
 
-      let mathOp = op.charAt(0); // + from +=
+      let mathOp = op.charAt(0);
       if (mathOp === "+")
         this.emitInstruction(
           "DADDU",
@@ -491,7 +456,6 @@ class CompilerSimulator {
         );
       }
 
-      // 4. Store Back
       if (sym.type === "char") {
         this.emitInstruction(
           "SB",
@@ -518,33 +482,25 @@ class CompilerSimulator {
 
   parsePrint() {
     this.resetTempRegs();
-    let cmd = this.tokens[this.pos++].value; // dsply or dsply@
+    let cmd = this.tokens[this.pos++].value;
 
     if (this.match(TokenType.DELIMITER, "[")) {
-      // Check content
       let t = this.peek();
       if (t.type === TokenType.STRING_LITERAL) {
-        // String print - Silent in ASM
         this.pos++;
       } else {
         if (cmd === "dsply")
           throw new Error("Use 'dsply@' to print variables/expressions");
-
-        // Parse Expression
         let reg = this.parseExpression();
-        // Silent in ASM for simple var, but complex expr generated instructions above
       }
       this.match(TokenType.DELIMITER, "]");
     }
-    // Skip !! or !
     while (
       this.match(TokenType.DELIMITER, "!") ||
       this.match(TokenType.DELIMITER, "!!")
     );
   }
 
-  // --- RECURSIVE DESCENT MATH PARSER ---
-  // Expression -> Term { + Term }
   parseExpression() {
     let leftReg = this.parseTerm();
 
@@ -588,7 +544,6 @@ class CompilerSimulator {
     return leftReg;
   }
 
-  // Term -> Factor { * Factor }
   parseTerm() {
     let leftReg = this.parseFactor();
 
@@ -634,7 +589,6 @@ class CompilerSimulator {
     return leftReg;
   }
 
-  // Factor -> Int | Var | (Expr)
   parseFactor() {
     let t = this.peek();
     let reg = this.getTempReg();
@@ -710,7 +664,6 @@ app.post("/compile", (req, res) => {
   const code = req.body.code;
   const tempFile = path.join(__dirname, "temp_code.txt");
 
-  // 1. Run JS Simulator (Generate ASM/Hex)
   let mips = "",
     binary = "";
   try {
@@ -720,7 +673,6 @@ app.post("/compile", (req, res) => {
     mips = simulator.dataSection + simulator.codeSection;
     binary = simulator.binaryOutput;
   } catch (err) {
-    // FAIL FAST
     return res.json({
       output: `Transpiler Error: ${err.message}`,
       mips: "",
@@ -728,7 +680,6 @@ app.post("/compile", (req, res) => {
     });
   }
 
-  // 2. Run Real C Compiler (edoc)
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
     if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
