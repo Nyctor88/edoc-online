@@ -14,13 +14,11 @@ app.use(express.static("public"));
 const isWindows = process.platform === "win32";
 const COMPILER_PATH = path.join(__dirname, isWindows ? "edoc.exe" : "edoc");
 
-// =============================================================
-//  PART 1: CONSTANTS & TOKEN DEFINITIONS
-// =============================================================
+//  CONSTANTS & TOKEN DEFINITIONS
 const TokenType = {
   KEYWORD: "KEYWORD",
   VARIABLE: "VARIABLE",
-  INTEGER: "INTEGER",
+  INTEGER: "INTEGER", // Used for both ints and floats
   CHAR_LITERAL: "CHAR_LITERAL",
   OPERATOR: "OPERATOR",
   DELIMITER: "DELIMITER",
@@ -40,9 +38,7 @@ const KEYWORDS = [
   "dsply@",
 ];
 
-// =============================================================
-//  PART 2: HELPERS (Binary & Hex)
-// =============================================================
+//  HELPERS (Binary & Hex)
 function toBin(num, bits) {
   let bin = (num >>> 0).toString(2);
   while (bin.length < bits) bin = "0" + bin;
@@ -55,9 +51,7 @@ function binToHex(binStr) {
   return "0x" + hex;
 }
 
-// =============================================================
-//  PART 3: THE COMPILER SIMULATOR CLASS
-// =============================================================
+//  THE COMPILER SIMULATOR CLASS
 class CompilerSimulator {
   constructor() {
     this.tokens = [];
@@ -71,7 +65,6 @@ class CompilerSimulator {
   }
 
   // --- ERROR HELPER ---
-  // Uses the current token's line number for accurate reporting
   error(message) {
     const token = this.peek();
     const lineStr = token ? `Line ${token.line}` : "End of File";
@@ -157,36 +150,32 @@ class CompilerSimulator {
     this.binaryOutput += `${binStr} (${hexStr})\n`;
   }
 
-  // --- TOKENIZER (Now Tracks Line Numbers) ---
+  // --- TOKENIZER ---
   tokenize(source) {
     let i = 0;
-    let line = 1; // Start at line 1
+    let line = 1;
     const length = source.length;
     this.tokens = [];
 
     while (i < length) {
       let char = source[i];
 
-      // 1. Newlines (Increment Line Count)
       if (char === "\n") {
         line++;
         i++;
         continue;
       }
 
-      // 2. Whitespace (Skip but don't count newlines again)
       if (/\s/.test(char)) {
         i++;
         continue;
       }
 
-      // 3. Comments
       if (char === "#" || (char === "/" && source[i + 1] === "/")) {
         while (i < length && source[i] !== "\n") i++;
         continue;
       }
 
-      // 4. Operators & Delimiters
       if ("=+-*/(),.;[]!".includes(char)) {
         if ("+-*/".includes(char) && source[i + 1] === "=") {
           this.tokens.push({
@@ -208,7 +197,6 @@ class CompilerSimulator {
         continue;
       }
 
-      // 5. String Literals
       if (char === '"') {
         let start = ++i;
         while (i < length && source[i] !== '"') i++;
@@ -226,14 +214,12 @@ class CompilerSimulator {
         continue;
       }
 
-      // 6. Single Quotes (Fail Fast)
       if (char === "'") {
         throw new Error(
           `Line ${line}: Single quotes are not supported. Use double quotes (") for characters.`
         );
       }
 
-      // 7. Identifiers & Keywords (Supports @)
       if (/[a-zA-Z_]/.test(char)) {
         let start = i;
         while (i < length && /[a-zA-Z0-9_@]/.test(source[i])) i++;
@@ -252,16 +238,26 @@ class CompilerSimulator {
         continue;
       }
 
-      // 8. Numbers
+      // --- NUMBER PARSING WITH DECIMALS ---
       if (/[0-9]/.test(char)) {
         let start = i;
         while (i < length && /[0-9]/.test(source[i])) i++;
+
+        // Check if there is a dot followed by more digits (e.g., 3.14)
+        if (
+          source[i] === "." &&
+          i + 1 < length &&
+          /[0-9]/.test(source[i + 1])
+        ) {
+          i++; // Consume dot
+          while (i < length && /[0-9]/.test(source[i])) i++; // Consume fraction
+        }
+
         let val = source.slice(start, i);
         this.tokens.push({ type: TokenType.INTEGER, value: val, line });
         continue;
       }
 
-      // 9. Unknown
       throw new Error(`Line ${line}: Unknown character '${char}'`);
     }
   }
@@ -327,8 +323,9 @@ class CompilerSimulator {
 
     if (this.match(TokenType.OPERATOR, "=")) {
       let reg = this.parseExpression();
+      let regNum = parseInt(reg.substring(1));
+
       if (type === "char") {
-        let regNum = parseInt(reg.substring(1));
         this.emitInstruction(
           "SB",
           0,
@@ -339,7 +336,6 @@ class CompilerSimulator {
           `init ${name}`
         );
       } else {
-        let regNum = parseInt(reg.substring(1));
         this.emitInstruction(
           "SD",
           0,
@@ -703,9 +699,7 @@ class CompilerSimulator {
   }
 }
 
-// =============================================================
-//  PART 4: EXPRESS API
-// =============================================================
+//  EXPRESS API
 app.post("/compile", (req, res) => {
   const code = req.body.code;
   const tempFile = path.join(__dirname, "temp_code.txt");
