@@ -149,7 +149,7 @@ class CompilerSimulator {
     this.binaryOutput += `${binStr} (${hexStr})\n`;
   }
 
-  // --- TOKENIZER ---
+  // --- 3.3: TOKENIZER (Stricter Version) ---
   tokenize(source) {
     let i = 0;
     const length = source.length;
@@ -158,16 +158,19 @@ class CompilerSimulator {
     while (i < length) {
       let char = source[i];
 
+      // 1. Skip Whitespace
       if (/\s/.test(char)) {
         i++;
         continue;
       }
 
+      // 2. Skip Comments
       if (char === "#" || (char === "/" && source[i + 1] === "/")) {
         while (i < length && source[i] !== "\n") i++;
         continue;
       }
 
+      // 3. Operators & Delimiters
       if ("=+-*/(),.;[]!".includes(char)) {
         if ("+-*/".includes(char) && source[i + 1] === "=") {
           this.tokens.push({ type: TokenType.OPERATOR, value: char + "=" });
@@ -185,11 +188,13 @@ class CompilerSimulator {
         continue;
       }
 
+      // 4. String Literals "text" (Double Quotes ONLY)
       if (char === '"') {
         let start = ++i;
         while (i < length && source[i] !== '"') i++;
         let val = source.slice(start, i);
         i++;
+        // Logic: Is it a char "D" or string "Hello"?
         if (val.length === 1) {
           this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val });
         } else {
@@ -198,15 +203,9 @@ class CompilerSimulator {
         continue;
       }
 
-      if (char === "'") {
-        let start = ++i;
-        while (i < length && source[i] !== "'") i++;
-        let val = source.slice(start, i);
-        i++;
-        this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val });
-        continue;
-      }
+      // REMOVED: Single Quote Block (This ensures 'D' triggers an error)
 
+      // 5. Identifiers & Keywords
       if (/[a-zA-Z_]/.test(char)) {
         let start = i;
         while (i < length && /[a-zA-Z0-9_@]/.test(source[i])) i++;
@@ -225,6 +224,7 @@ class CompilerSimulator {
         continue;
       }
 
+      // 6. Numbers
       if (/[0-9]/.test(char)) {
         let start = i;
         while (i < length && /[0-9]/.test(source[i])) i++;
@@ -233,7 +233,9 @@ class CompilerSimulator {
         continue;
       }
 
-      i++;
+      // 7. UNKNOWN CHARACTER -> FAIL FAST
+      // Previously this was i++; which just skipped errors!
+      throw new Error(`Unknown character: '${char}' at index ${i}`);
     }
   }
 
