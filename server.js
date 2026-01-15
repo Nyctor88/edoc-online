@@ -207,10 +207,8 @@ class CompilerSimulator {
         continue;
       }
 
-      // --- FIX: Include '@' in Identifier Regex ---
       if (/[a-zA-Z_]/.test(char)) {
         let start = i;
-        // Added '@' to this character class so "dsply@" is captured as one token
         while (i < length && /[a-zA-Z0-9_@]/.test(source[i])) i++;
         let val = source.slice(start, i);
 
@@ -486,13 +484,35 @@ class CompilerSimulator {
 
     if (this.match(TokenType.DELIMITER, "[")) {
       let t = this.peek();
+
+      // --- FIX START: Handle Silent Printing ---
+
+      // 1. String Literals (dsply ["hello"]) -> Silent
       if (t.type === TokenType.STRING_LITERAL) {
         this.pos++;
-      } else {
+      }
+      // 2. Single Variables (dsply@[var]) -> Silent (Don't emit LD)
+      else if (
+        t.type === TokenType.VARIABLE &&
+        this.tokens[this.pos + 1].value === "]"
+      ) {
+        if (cmd === "dsply") throw new Error("Use 'dsply@' to print variables");
+
+        // Just validate it exists
+        let name = t.value;
+        let sym = this.findSymbol(name);
+        if (!sym) throw new Error(`Undefined variable '${name}'`);
+
+        this.pos++; // Skip var token
+      }
+      // 3. Complex Expressions (dsply@[var+1]) -> Generate ASM
+      else {
         if (cmd === "dsply")
           throw new Error("Use 'dsply@' to print variables/expressions");
         let reg = this.parseExpression();
       }
+      // --- FIX END ---
+
       this.match(TokenType.DELIMITER, "]");
     }
     while (
