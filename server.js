@@ -70,10 +70,18 @@ class CompilerSimulator {
     this.tempRegCount = 0;
   }
 
+  // --- ERROR HELPER ---
+  // Uses the current token's line number for accurate reporting
+  error(message) {
+    const token = this.peek();
+    const lineStr = token ? `Line ${token.line}` : "End of File";
+    throw new Error(`${lineStr}: ${message}`);
+  }
+
   // --- SYMBOL TABLE ---
   addSymbol(name, type, isConst) {
     if (this.findSymbol(name)) {
-      throw new Error(`Redeclaration of variable '${name}'`);
+      this.error(`Redeclaration of variable '${name}'`);
     }
 
     let addr = this.currentAddr;
@@ -149,63 +157,83 @@ class CompilerSimulator {
     this.binaryOutput += `${binStr} (${hexStr})\n`;
   }
 
-  // --- 3.3: TOKENIZER (Stricter Version) ---
+  // --- TOKENIZER (Now Tracks Line Numbers) ---
   tokenize(source) {
     let i = 0;
+    let line = 1; // Start at line 1
     const length = source.length;
     this.tokens = [];
 
     while (i < length) {
       let char = source[i];
 
-      // 1. Skip Whitespace
+      // 1. Newlines (Increment Line Count)
+      if (char === "\n") {
+        line++;
+        i++;
+        continue;
+      }
+
+      // 2. Whitespace (Skip but don't count newlines again)
       if (/\s/.test(char)) {
         i++;
         continue;
       }
 
-      // 2. Skip Comments
+      // 3. Comments
       if (char === "#" || (char === "/" && source[i + 1] === "/")) {
         while (i < length && source[i] !== "\n") i++;
         continue;
       }
 
-      // 3. Operators & Delimiters
+      // 4. Operators & Delimiters
       if ("=+-*/(),.;[]!".includes(char)) {
         if ("+-*/".includes(char) && source[i + 1] === "=") {
-          this.tokens.push({ type: TokenType.OPERATOR, value: char + "=" });
+          this.tokens.push({
+            type: TokenType.OPERATOR,
+            value: char + "=",
+            line,
+          });
           i += 2;
         } else if (char === "!" && source[i + 1] === "!") {
-          this.tokens.push({ type: TokenType.DELIMITER, value: "!!" });
+          this.tokens.push({ type: TokenType.DELIMITER, value: "!!", line });
           i += 2;
         } else {
           let type = "=+-*/".includes(char)
             ? TokenType.OPERATOR
             : TokenType.DELIMITER;
-          this.tokens.push({ type: type, value: char });
+          this.tokens.push({ type: type, value: char, line });
           i++;
         }
         continue;
       }
 
-      // 4. String Literals "text" (Double Quotes ONLY)
+      // 5. String Literals
       if (char === '"') {
         let start = ++i;
         while (i < length && source[i] !== '"') i++;
         let val = source.slice(start, i);
         i++;
-        // Logic: Is it a char "D" or string "Hello"?
         if (val.length === 1) {
-          this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val });
+          this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val, line });
         } else {
-          this.tokens.push({ type: TokenType.STRING_LITERAL, value: val });
+          this.tokens.push({
+            type: TokenType.STRING_LITERAL,
+            value: val,
+            line,
+          });
         }
         continue;
       }
 
-      // REMOVED: Single Quote Block (This ensures 'D' triggers an error)
+      // 6. Single Quotes (Fail Fast)
+      if (char === "'") {
+        throw new Error(
+          `Line ${line}: Single quotes are not supported. Use double quotes (") for characters.`
+        );
+      }
 
-      // 5. Identifiers & Keywords
+      // 7. Identifiers & Keywords (Supports @)
       if (/[a-zA-Z_]/.test(char)) {
         let start = i;
         while (i < length && /[a-zA-Z0-9_@]/.test(source[i])) i++;
@@ -217,25 +245,24 @@ class CompilerSimulator {
           val === "float" ||
           val === "char"
         ) {
-          this.tokens.push({ type: TokenType.KEYWORD, value: val });
+          this.tokens.push({ type: TokenType.KEYWORD, value: val, line });
         } else {
-          this.tokens.push({ type: TokenType.VARIABLE, value: val });
+          this.tokens.push({ type: TokenType.VARIABLE, value: val, line });
         }
         continue;
       }
 
-      // 6. Numbers
+      // 8. Numbers
       if (/[0-9]/.test(char)) {
         let start = i;
         while (i < length && /[0-9]/.test(source[i])) i++;
         let val = source.slice(start, i);
-        this.tokens.push({ type: TokenType.INTEGER, value: val });
+        this.tokens.push({ type: TokenType.INTEGER, value: val, line });
         continue;
       }
 
-      // 7. UNKNOWN CHARACTER -> FAIL FAST
-      // Previously this was i++; which just skipped errors!
-      throw new Error(`Unknown character: '${char}' at index ${i}`);
+      // 9. Unknown
+      throw new Error(`Line ${line}: Unknown character '${char}'`);
     }
   }
 
@@ -275,7 +302,7 @@ class CompilerSimulator {
       } else if (t.value === "dsply" || t.value === "dsply@") {
         this.parsePrint();
       } else {
-        this.pos++;
+        this.error(`Unexpected token '${t.value}'`);
       }
     }
   }
@@ -284,14 +311,15 @@ class CompilerSimulator {
     this.resetTempRegs();
     let scope = this.tokens[this.pos++].value;
 
-    while (this.peek().value === ".") this.pos++;
+    while (this.peek() && this.peek().value === ".") this.pos++;
 
     let typeToken = this.match(TokenType.KEYWORD);
-    if (!typeToken) throw new Error("Expected type after declaration");
+    if (!typeToken)
+      this.error("Expected type (int/float/char) after declaration");
     let type = typeToken.value;
 
     let nameToken = this.match(TokenType.VARIABLE);
-    if (!nameToken) throw new Error("Expected variable name");
+    if (!nameToken) this.error("Expected variable name");
     let name = nameToken.value;
 
     let isConst = scope === "const";
@@ -331,11 +359,11 @@ class CompilerSimulator {
     let name = nameToken.value;
     let sym = this.findSymbol(name);
 
-    if (!sym) throw new Error(`Undefined variable '${name}'`);
-    if (sym.isConst) throw new Error(`Cannot reassign constant '${name}'`);
+    if (!sym) this.error(`Undefined variable '${name}'`);
+    if (sym.isConst) this.error(`Cannot reassign constant '${name}'`);
 
     let opToken = this.match(TokenType.OPERATOR);
-    if (!opToken) return;
+    if (!opToken) this.error(`Expected assignment operator for '${name}'`);
 
     let op = opToken.value;
 
@@ -482,40 +510,32 @@ class CompilerSimulator {
 
   parsePrint() {
     this.resetTempRegs();
-    let cmd = this.tokens[this.pos++].value;
+    let cmdToken = this.tokens[this.pos++];
+    let cmd = cmdToken.value;
 
     if (this.match(TokenType.DELIMITER, "[")) {
       let t = this.peek();
 
-      // --- FIX START: Handle Silent Printing ---
-
-      // 1. String Literals (dsply ["hello"]) -> Silent
       if (t.type === TokenType.STRING_LITERAL) {
         this.pos++;
-      }
-      // 2. Single Variables (dsply@[var]) -> Silent (Don't emit LD)
-      else if (
+      } else if (
         t.type === TokenType.VARIABLE &&
         this.tokens[this.pos + 1].value === "]"
       ) {
-        if (cmd === "dsply") throw new Error("Use 'dsply@' to print variables");
-
-        // Just validate it exists
+        if (cmd === "dsply") this.error("Use 'dsply@' to print variables");
         let name = t.value;
         let sym = this.findSymbol(name);
-        if (!sym) throw new Error(`Undefined variable '${name}'`);
-
-        this.pos++; // Skip var token
-      }
-      // 3. Complex Expressions (dsply@[var+1]) -> Generate ASM
-      else {
+        if (!sym) this.error(`Undefined variable '${name}'`);
+        this.pos++;
+      } else {
         if (cmd === "dsply")
-          throw new Error("Use 'dsply@' to print variables/expressions");
+          this.error("Use 'dsply@' to print variables/expressions");
         let reg = this.parseExpression();
       }
-      // --- FIX END ---
 
-      this.match(TokenType.DELIMITER, "]");
+      if (!this.match(TokenType.DELIMITER, "]")) {
+        this.error("Missing closing bracket ']'");
+      }
     }
     while (
       this.match(TokenType.DELIMITER, "!") ||
@@ -613,6 +633,8 @@ class CompilerSimulator {
 
   parseFactor() {
     let t = this.peek();
+    if (!t) this.error("Unexpected end of input");
+
     let reg = this.getTempReg();
     let regNum = parseInt(reg.substring(1));
 
@@ -644,7 +666,7 @@ class CompilerSimulator {
       return reg;
     } else if (t.type === TokenType.VARIABLE) {
       let sym = this.findSymbol(t.value);
-      if (!sym) throw new Error(`Undefined variable '${t.value}'`);
+      if (!sym) this.error(`Undefined variable '${t.value}'`);
 
       if (sym.type === "char") {
         this.emitInstruction(
@@ -672,10 +694,12 @@ class CompilerSimulator {
     } else if (t.value === "(") {
       this.pos++;
       let r = this.parseExpression();
-      this.match(TokenType.DELIMITER, ")");
+      if (!this.match(TokenType.DELIMITER, ")")) {
+        this.error("Missing closing parenthesis ')'");
+      }
       return r;
     }
-    throw new Error(`Unexpected token '${t.value}'`);
+    this.error(`Unexpected token '${t.value}'`);
   }
 }
 
