@@ -14,7 +14,35 @@ app.use(express.static("public"));
 const isWindows = process.platform === "win32";
 const COMPILER_PATH = path.join(__dirname, isWindows ? "edoc.exe" : "edoc");
 
-// --- HELPER: BINARY ENCODING ---
+// =============================================================
+//  PART 1: CONSTANTS & TOKEN DEFINITIONS (Inspired by C Enums)
+// =============================================================
+const TokenType = {
+  KEYWORD: "KEYWORD",
+  VARIABLE: "VARIABLE",
+  INTEGER: "INTEGER",
+  CHAR_LITERAL: "CHAR_LITERAL", // Added for your current project
+  OPERATOR: "OPERATOR",
+  DELIMITER: "DELIMITER",
+  STRING_LITERAL: "STRING_LITERAL", // For dsply ["text"]
+  UNKNOWN: "UNKNOWN",
+};
+
+const KEYWORDS = [
+  "boot",
+  "end",
+  "var",
+  "const",
+  "int",
+  "float",
+  "char",
+  "dsply",
+  "dsply@",
+];
+
+// =============================================================
+//  PART 2: HELPERS (Binary & Hex)
+// =============================================================
 function toBin(num, bits) {
   let bin = (num >>> 0).toString(2);
   while (bin.length < bits) bin = "0" + bin;
@@ -27,439 +55,692 @@ function binToHex(binStr) {
   return "0x" + hex;
 }
 
-function encodeRType(opcode, rs, rt, rd, shamt, funct) {
-  return (
-    toBin(opcode, 6) +
-    toBin(rs, 5) +
-    toBin(rt, 5) +
-    toBin(rd, 5) +
-    toBin(shamt, 5) +
-    toBin(funct, 6)
-  );
-}
-
-function encodeIType(opcode, rs, rt, imm) {
-  return toBin(opcode, 6) + toBin(rs, 5) + toBin(rt, 5) + toBin(imm, 16);
-}
-
-function encodeLD(rt, base, offset) {
-  return encodeIType(55, base, rt, offset);
-}
-
-function encodeSD(rt, base, offset) {
-  return encodeIType(63, base, rt, offset);
-}
-
-// Opcode 40 (0x28) is SB (Store Byte)
-function encodeSB(rt, base, offset) {
-  return encodeIType(40, base, rt, offset);
-}
-
-// Opcode 36 (0x24) is LBU (Load Byte Unsigned)
-function encodeLBU(rt, base, offset) {
-  return encodeIType(36, base, rt, offset);
-}
-
-// --- EXPRESSION PARSER (Shunting-Yard) ---
-function tokenize(expr) {
-  const regex = /([0-9]+)|([a-zA-Z_][a-zA-Z0-9_]*)|([\+\-\*\/])|(\()|(\))/g;
-  let tokens = [];
-  let match;
-  while ((match = regex.exec(expr)) !== null) {
-    tokens.push(match[0]);
+// =============================================================
+//  PART 3: THE COMPILER SIMULATOR CLASS
+//  (Encapsulates Symbol Table, Tokenizer, Parser, CodeGen)
+// =============================================================
+class CompilerSimulator {
+  constructor() {
+    this.tokens = [];
+    this.pos = 0;
+    this.symbolTable = []; // Array of { name, type, addr, isConst }
+    this.currentAddr = 0;
+    this.dataSection = ".data\n";
+    this.codeSection = ".code\n";
+    this.binaryOutput = "";
+    this.tempRegCount = 0;
   }
-  return tokens;
-}
 
-function shuntingYard(tokens) {
-  let outputQueue = [];
-  let operatorStack = [];
-  const precedence = { "*": 3, "/": 3, "+": 2, "-": 2 };
-
-  tokens.forEach((token) => {
-    if (!isNaN(parseInt(token)) || /^[a-zA-Z_]/.test(token)) {
-      outputQueue.push(token);
-    } else if (token in precedence) {
-      while (
-        operatorStack.length > 0 &&
-        operatorStack[operatorStack.length - 1] !== "(" &&
-        precedence[operatorStack[operatorStack.length - 1]] >= precedence[token]
-      ) {
-        outputQueue.push(operatorStack.pop());
-      }
-      operatorStack.push(token);
-    } else if (token === "(") {
-      operatorStack.push(token);
-    } else if (token === ")") {
-      while (
-        operatorStack.length > 0 &&
-        operatorStack[operatorStack.length - 1] !== "("
-      ) {
-        outputQueue.push(operatorStack.pop());
-      }
-      operatorStack.pop();
+  // --- 3.1: SYMBOL TABLE HELPERS ---
+  addSymbol(name, type, isConst) {
+    if (this.findSymbol(name)) {
+      throw new Error(`Redeclaration of variable '${name}'`);
     }
-  });
 
-  while (operatorStack.length > 0) {
-    outputQueue.push(operatorStack.pop());
+    let addr = this.currentAddr;
+    // In your C code, you incremented by 8 (dword).
+    // For this project, we do 8 for ints/floats, 1 for char (optional, but sticking to 8 aligns memory easier)
+    // Let's stick to your previous .byte logic for chars though to match MIPS logic.
+    let size = type === "char" ? 1 : 8;
+
+    this.symbolTable.push({ name, type, addr, isConst });
+
+    // Update Data Section String
+    let directive = type === "char" ? ".byte" : ".dword";
+    this.dataSection += `    ${name}: ${directive}\n`; // Address info could be added as comment
+
+    // MIPS often aligns data, but for simulation we just increment
+    this.currentAddr += size;
   }
-  return outputQueue;
-}
 
-// --- ASM GENERATOR ---
-function generateComplexASM(expr, machineCodeOutput, getNextReg) {
-  // Unary Minus Hack
-  expr = expr.replace(/^-\s*([a-zA-Z0-9]+)/, "0 - $1");
-  expr = expr.replace(/\(-\s*([a-zA-Z0-9]+)/g, "(0 - $1");
+  findSymbol(name) {
+    return this.symbolTable.find((s) => s.name === name);
+  }
 
-  const tokens = tokenize(expr);
-  const rpn = shuntingYard(tokens);
+  getTempReg() {
+    this.tempRegCount++;
+    return `R${this.tempRegCount}`;
+  }
 
-  let asm = "";
-  let regStack = [];
+  resetTempRegs() {
+    this.tempRegCount = 0;
+  }
 
-  rpn.forEach((token) => {
-    if (!isNaN(parseInt(token))) {
-      // Immediate
-      let val = parseInt(token);
-      let reg = getNextReg();
-      asm += `    DADDIU R${reg}, R0, #${val}\n`;
-      let b = encodeIType(25, 0, reg, val);
-      machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-      regStack.push(reg);
-    } else if (/^[a-zA-Z_]/.test(token)) {
-      // Variable
-      let reg = getNextReg();
-      asm += `    LD R${reg}, ${token}(R0)\n`;
-      let b = encodeLD(reg, 0, 0);
-      machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-      regStack.push(reg);
-    } else {
-      // Operator
-      let rRight = regStack.pop();
-      let rLeft = regStack.pop();
-      let rRes = getNextReg();
+  // --- 3.2: MACHINE CODE WRITER (Ported from C) ---
+  emitInstruction(instr, rd, rs, rt, imm, asm_instr, comment) {
+    let opcode = 0,
+      funct = 0,
+      machine = 0;
 
-      if (token === "+") {
-        asm += `    DADDU R${rRes}, R${rLeft}, R${rRight}\n`;
-        let b = encodeRType(0, rLeft, rRight, rRes, 0, 45);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-      } else if (token === "-") {
-        asm += `    DSUBU R${rRes}, R${rLeft}, R${rRight}\n`;
-        let b = encodeRType(0, rLeft, rRight, rRes, 0, 47);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-      } else if (token === "*") {
-        asm += `    DMULTU R${rLeft}, R${rRight}\n`;
-        let b = encodeRType(0, rLeft, rRight, 0, 0, 29);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-
-        asm += `    MFLO R${rRes}\n`;
-        let b2 = encodeRType(0, 0, 0, rRes, 0, 18);
-        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-      } else if (token === "/") {
-        asm += `    DDIVU R${rLeft}, R${rRight}\n`;
-        let b = encodeRType(0, rLeft, rRight, 0, 0, 31);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-
-        asm += `    MFLO R${rRes}\n`;
-        let b2 = encodeRType(0, 0, 0, rRes, 0, 18);
-        machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-      }
-      regStack.push(rRes);
+    // Map instructions to OpCodes (Matching your C structure)
+    if (instr === "DADDIU") {
+      opcode = 0b011001;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
+    } else if (instr === "DADDU") {
+      opcode = 0b000000;
+      funct = 0b101101;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (rd << 11) | funct;
+    } else if (instr === "DSUBU") {
+      opcode = 0b000000;
+      funct = 0b101111;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (rd << 11) | funct;
+    } else if (instr === "DMULTU") {
+      opcode = 0b000000;
+      funct = 0b011101;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | funct;
+    } else if (instr === "DDIVU") {
+      opcode = 0b000000;
+      funct = 0b011111;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | funct;
+    } else if (instr === "LD") {
+      opcode = 0b110111;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
+    } else if (instr === "SD") {
+      opcode = 0b111111;
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
+    } else if (instr === "MFLO") {
+      opcode = 0b000000;
+      funct = 0b010010;
+      machine = (opcode << 26) | (0 << 21) | (0 << 16) | (rd << 11) | funct;
     }
-  });
-
-  return { asm: asm, reg: regStack.pop() };
-}
-
-// --- MAIN ENGINE ---
-function generateEduMIPS(sourceCode) {
-  const lines = sourceCode.split("\n");
-  let dataSection = ".data\n";
-  let codeSection = ".code\n";
-
-  let machineCodeOutput = { code: "" };
-  const constantVars = new Set();
-  const charVars = new Set();
-
-  // Register Manager
-  let tempRegCount = 0;
-  const getNextReg = () => {
-    tempRegCount++;
-    return tempRegCount;
-  };
-  const resetTemps = () => {
-    tempRegCount = 0;
-  };
-
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    let line = lines[lineIdx].trim();
-    const lineNum = lineIdx + 1;
-
-    if (
-      !line ||
-      line.startsWith("boot") ||
-      line.startsWith("end") ||
-      line.startsWith("//") ||
-      line.startsWith("#")
-    )
-      continue;
-
-    // 1. DECLARATIONS
-    const declMatch = line.match(/^(var|const)\s*\.\s*(int|float|char)\b/);
-
-    if (declMatch) {
-      resetTemps();
-      const isConst = declMatch[1] === "const";
-      // Correct Index for type is 2
-      const type = declMatch[2];
-
-      const hasAssignment = line.includes("=");
-      const rightSide = hasAssignment ? line.split("=")[1].trim() : "";
-      const isComplex = hasAssignment && /[+\-*/]/.test(rightSide);
-
-      if (isComplex) {
-        const leftSide = line.split("=")[0].trim();
-        const prefix = leftSide.match(
-          /^(var|const)\s*\.\s*(int|float|char)\s+/
-        )[0];
-        const varName = leftSide.replace(prefix, "").trim();
-
-        if (!varName)
-          throw new Error(`Line ${lineNum}: Missing variable name.`);
-        if (isConst) constantVars.add(varName);
-        if (type === "char") charVars.add(varName);
-
-        // DATA
-        if (type === "char") dataSection += `    ${varName}: .byte\n`;
-        else dataSection += `    ${varName}: .dword\n`;
-
-        let result = generateComplexASM(
-          rightSide,
-          machineCodeOutput,
-          getNextReg
-        );
-        codeSection += result.asm;
-
-        // STORE
-        if (type === "char") {
-          codeSection += `    SB R${result.reg}, ${varName}(R0)\n`;
-          let b = encodeSB(result.reg, 0, 0);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-        } else {
-          codeSection += `    SD R${result.reg}, ${varName}(R0)\n`;
-          let b = encodeSD(result.reg, 0, 0);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-        }
-      } else {
-        // Simple Loop Declaration
-        let cleanLine = line.replace(
-          declMatch[0],
-          `${declMatch[1]}.${declMatch[2]} `
-        );
-
-        const parts = cleanLine
-          .replace(/,/g, " ")
-          .replace(/=/g, " ")
-          .split(/\s+/);
-        let currentVar = null;
-
-        for (let i = 0; i < parts.length; i++) {
-          let token = parts[i];
-          if (/^(var|const)\.(int|float|char)$/.test(token) || token === "")
-            continue;
-
-          if (!currentVar) {
-            currentVar = token;
-            if (isConst) constantVars.add(currentVar);
-            if (type === "char") charVars.add(currentVar);
-
-            if (type === "char") dataSection += `    ${currentVar}: .byte\n`;
-            else dataSection += `    ${currentVar}: .dword\n`;
-          } else {
-            let val;
-            if (
-              (token.startsWith('"') && token.endsWith('"')) ||
-              (token.startsWith("'") && token.endsWith("'"))
-            ) {
-              let cleanChar = token.substring(1, token.length - 1);
-              val = cleanChar.charCodeAt(0);
-            } else {
-              val = parseInt(token);
-            }
-
-            if (isNaN(val))
-              throw new Error(
-                `Line ${lineNum}: Invalid value assigned to '${currentVar}'.`
-              );
-
-            let reg = getNextReg();
-            codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
-            let b = encodeIType(25, 0, reg, val);
-            machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-
-            if (charVars.has(currentVar)) {
-              codeSection += `    SB R${reg}, ${currentVar}(R0)\n`;
-              let b2 = encodeSB(reg, 0, 0);
-              machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-            } else {
-              codeSection += `    SD R${reg}, ${currentVar}(R0)\n`;
-              let b2 = encodeSD(reg, 0, 0);
-              machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-            }
-            currentVar = null;
-          }
-        }
-      }
+    // Added for your current project (Char support)
+    else if (instr === "SB") {
+      opcode = 0b101000; // 0x28
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
+    } else if (instr === "LBU") {
+      opcode = 0b100100; // 0x24
+      machine = (opcode << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff);
     }
 
-    // 2. ASSIGNMENTS
-    else if (
-      /^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/.test(line) &&
-      !line.startsWith("dsply")
-    ) {
-      resetTemps();
-      const match = line.match(/^([a-zA-Z0-9_]+)\s*(\+=|-=|\*=|\/=|=)\s*(.+)$/);
-      const target = match[1];
-      const operator = match[2];
-      let expr = match[3];
+    let binStr = toBin(machine, 32);
+    let hexStr = binToHex(binStr);
 
-      if (constantVars.has(target)) {
-        throw new Error(
-          `Line ${lineNum}: Error. Cannot reassign constant '${target}'.`
-        );
+    this.codeSection += `    ${asm_instr}\n`;
+    this.binaryOutput += `${binStr} (${hexStr})\n`;
+  }
+
+  // --- 3.3: TOKENIZER (Loop-based, replacing regex split) ---
+  tokenize(source) {
+    let i = 0;
+    const length = source.length;
+    this.tokens = [];
+
+    while (i < length) {
+      let char = source[i];
+
+      // Skip Whitespace
+      if (/\s/.test(char)) {
+        i++;
+        continue;
       }
 
-      if (operator !== "=") {
-        const mathOp = operator.charAt(0);
-        expr = `${target} ${mathOp} (${expr})`;
+      // Comments (// or #)
+      if (char === "#" || (char === "/" && source[i + 1] === "/")) {
+        while (i < length && source[i] !== "\n") i++;
+        continue;
       }
 
-      if (/[+\-*/]/.test(expr)) {
-        let result = generateComplexASM(expr, machineCodeOutput, getNextReg);
-        codeSection += result.asm;
-
-        if (charVars.has(target)) {
-          codeSection += `    SB R${result.reg}, ${target}(R0)\n`;
-          let b = encodeSB(result.reg, 0, 0);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+      // Operators & Delimiters
+      if ("=+-*/(),.;[]!".includes(char)) {
+        // Check for compound operators +=, -=, etc.
+        if ("+-*/".includes(char) && source[i + 1] === "=") {
+          this.tokens.push({ type: TokenType.OPERATOR, value: char + "=" });
+          i += 2;
+        } else if (char === "!" && source[i + 1] === "!") {
+          this.tokens.push({ type: TokenType.DELIMITER, value: "!!" });
+          i += 2;
         } else {
-          codeSection += `    SD R${result.reg}, ${target}(R0)\n`;
-          let b = encodeSD(result.reg, 0, 0);
-          machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
+          let type = "=+-*/".includes(char)
+            ? TokenType.OPERATOR
+            : TokenType.DELIMITER;
+          this.tokens.push({ type: type, value: char });
+          i++;
         }
-      } else {
-        let val;
-        expr = expr.trim();
+        continue;
+      }
+
+      // Strings "text"
+      if (char === '"') {
+        let start = ++i;
+        while (i < length && source[i] !== '"') i++;
+        let val = source.slice(start, i);
+        i++; // skip closing quote
+        // Logic: Is it a char "D" or string "Hello"?
+        if (val.length === 1) {
+          this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val });
+        } else {
+          this.tokens.push({ type: TokenType.STRING_LITERAL, value: val });
+        }
+        continue;
+      }
+      // Single quotes 'D'
+      if (char === "'") {
+        let start = ++i;
+        while (i < length && source[i] !== "'") i++;
+        let val = source.slice(start, i);
+        i++;
+        this.tokens.push({ type: TokenType.CHAR_LITERAL, value: val });
+        continue;
+      }
+
+      // Identifiers & Keywords
+      if (/[a-zA-Z_]/.test(char)) {
+        let start = i;
+        while (i < length && /[a-zA-Z0-9_]/.test(source[i])) i++;
+        let val = source.slice(start, i);
+
+        // Handle "var.int" logic (your flexible requirement)
+        // If previous token was 'var' or 'const' and current is 'int', we treat as keyword sequence
+
         if (
-          (expr.startsWith('"') && expr.endsWith('"')) ||
-          (expr.startsWith("'") && expr.endsWith("'"))
+          KEYWORDS.includes(val) ||
+          val === "int" ||
+          val === "float" ||
+          val === "char"
         ) {
-          let cleanChar = expr.substring(1, expr.length - 1);
-          val = cleanChar.charCodeAt(0);
+          this.tokens.push({ type: TokenType.KEYWORD, value: val });
         } else {
-          val = parseInt(expr);
+          this.tokens.push({ type: TokenType.VARIABLE, value: val });
         }
-
-        if (isNaN(val))
-          throw new Error(`Line ${lineNum}: Invalid assignment value.`);
-
-        let reg = getNextReg();
-        codeSection += `    DADDIU R${reg}, R0, #${val}\n`;
-        let b = encodeIType(25, 0, reg, val);
-        machineCodeOutput.code += `${b} (${binToHex(b)})\n`;
-
-        if (charVars.has(target)) {
-          codeSection += `    SB R${reg}, ${target}(R0)\n`;
-          let b2 = encodeSB(reg, 0, 0);
-          machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-        } else {
-          codeSection += `    SD R${reg}, ${target}(R0)\n`;
-          let b2 = encodeSD(reg, 0, 0);
-          machineCodeOutput.code += `${b2} (${binToHex(b2)})\n`;
-        }
-      }
-    }
-
-    // 3. PRINTING
-    else if (line.startsWith("dsply@")) {
-      resetTemps();
-      let match = line.match(/\[(.*?)\]/);
-
-      if (!match || !match[1] || match[1].trim() === "") {
-        throw new Error(
-          `Syntax Error on line ${lineNum}: dsply@[] cannot be empty.`
-        );
+        continue;
       }
 
-      let content = match[1].trim();
-
-      if (/[+\-*/]/.test(content)) {
-        let result = generateComplexASM(content, machineCodeOutput, getNextReg);
-        codeSection += result.asm;
-      } else {
-        // Silent for single variable print (No Assembly)
+      // Numbers
+      if (/[0-9]/.test(char)) {
+        let start = i;
+        while (i < length && /[0-9]/.test(source[i])) i++;
+        let val = source.slice(start, i);
+        this.tokens.push({ type: TokenType.INTEGER, value: val });
+        continue;
       }
-    }
 
-    // 4. STRING PRINT / ERROR
-    else if (line.startsWith("dsply")) {
-      if (!line.includes('"')) {
-        throw new Error(
-          `Syntax Error on line ${lineNum}: Use 'dsply@' to print variables.`
-        );
-      }
-    } else {
-      throw new Error(
-        `Syntax Error on line ${lineNum}: Unknown statement "${line}".`
-      );
+      i++; // Skip unknown
     }
   }
 
-  return { mips: dataSection + codeSection, binary: machineCodeOutput.code };
+  // --- 3.4: RECURSIVE DESCENT PARSER (Structure from C) ---
+
+  // Helpers to consume tokens
+  match(type, value) {
+    if (this.pos < this.tokens.length) {
+      let t = this.tokens[this.pos];
+      if (t.type === type && (!value || t.value === value)) {
+        this.pos++;
+        return t;
+      }
+    }
+    return null;
+  }
+
+  peek() {
+    return this.tokens[this.pos];
+  }
+
+  // Main Entry Point
+  parse() {
+    while (this.pos < this.tokens.length) {
+      let t = this.peek();
+
+      if (t.value === "boot") {
+        this.pos++;
+        continue;
+      }
+      if (t.value === "end") {
+        this.pos++;
+        continue;
+      }
+
+      if (t.value === "var" || t.value === "const") {
+        this.parseDeclaration();
+      } else if (t.type === TokenType.VARIABLE) {
+        this.parseAssignment();
+      } else if (t.value === "dsply" || t.value === "dsply@") {
+        this.parsePrint();
+      } else {
+        this.pos++; // Skip unknown/delimiters
+      }
+    }
+  }
+
+  parseDeclaration() {
+    // Format: var . type name = val
+    this.resetTempRegs();
+    let scope = this.tokens[this.pos++].value; // var or const
+
+    // Skip dots/spaces until type
+    while (this.peek().value === ".") this.pos++;
+
+    let typeToken = this.match(TokenType.KEYWORD); // int/float/char
+    if (!typeToken) throw new Error("Expected type after declaration");
+    let type = typeToken.value;
+
+    let nameToken = this.match(TokenType.VARIABLE);
+    if (!nameToken) throw new Error("Expected variable name");
+    let name = nameToken.value;
+
+    // Add to Symbol Table
+    let isConst = scope === "const";
+    this.addSymbol(name, type, isConst);
+
+    // Check for Assignment
+    if (this.match(TokenType.OPERATOR, "=")) {
+      // Parse the RHS expression
+      let reg = this.parseExpression();
+
+      // Generate Store Instruction
+      if (type === "char") {
+        // SB (Store Byte)
+        let regNum = parseInt(reg.substring(1));
+        this.emitInstruction(
+          "SB",
+          0,
+          regNum,
+          0,
+          0,
+          `SB ${reg}, ${name}(R0)`,
+          `init ${name}`
+        );
+      } else {
+        // SD (Store Double)
+        let regNum = parseInt(reg.substring(1));
+        this.emitInstruction(
+          "SD",
+          0,
+          regNum,
+          0,
+          0,
+          `SD ${reg}, ${name}(R0)`,
+          `init ${name}`
+        );
+      }
+    }
+  }
+
+  parseAssignment() {
+    this.resetTempRegs();
+    let nameToken = this.match(TokenType.VARIABLE);
+    let name = nameToken.value;
+    let sym = this.findSymbol(name);
+
+    if (!sym) throw new Error(`Undefined variable '${name}'`);
+    if (sym.isConst) throw new Error(`Cannot reassign constant '${name}'`);
+
+    let opToken = this.match(TokenType.OPERATOR);
+    if (!opToken) return; // Weird state
+
+    let op = opToken.value; // =, +=, -= ...
+
+    if (op === "=") {
+      let reg = this.parseExpression();
+      let regNum = parseInt(reg.substring(1));
+
+      if (sym.type === "char") {
+        this.emitInstruction(
+          "SB",
+          0,
+          regNum,
+          0,
+          0,
+          `SB ${reg}, ${name}(R0)`,
+          `assign ${name}`
+        );
+      } else {
+        this.emitInstruction(
+          "SD",
+          0,
+          regNum,
+          0,
+          0,
+          `SD ${reg}, ${name}(R0)`,
+          `assign ${name}`
+        );
+      }
+    } else {
+      // Compound (+=, etc) logic: Load, Op, Store
+      // 1. Load current val
+      let loadReg = this.getTempReg();
+      let loadRegNum = parseInt(loadReg.substring(1));
+      if (sym.type === "char") {
+        this.emitInstruction(
+          "LBU",
+          loadRegNum,
+          0,
+          0,
+          0,
+          `LBU ${loadReg}, ${name}(R0)`,
+          `load for ${op}`
+        );
+      } else {
+        this.emitInstruction(
+          "LD",
+          loadRegNum,
+          0,
+          0,
+          0,
+          `LD ${loadReg}, ${name}(R0)`,
+          `load for ${op}`
+        );
+      }
+
+      // 2. Parse RHS
+      let rhsReg = this.parseExpression();
+      let rhsRegNum = parseInt(rhsReg.substring(1));
+
+      // 3. Perform Op
+      let resReg = this.getTempReg();
+      let resRegNum = parseInt(resReg.substring(1));
+
+      let mathOp = op.charAt(0); // + from +=
+      if (mathOp === "+")
+        this.emitInstruction(
+          "DADDU",
+          resRegNum,
+          loadRegNum,
+          rhsRegNum,
+          0,
+          `DADDU ${resReg}, ${loadReg}, ${rhsReg}`,
+          "add assign"
+        );
+      else if (mathOp === "-")
+        this.emitInstruction(
+          "DSUBU",
+          resRegNum,
+          loadRegNum,
+          rhsRegNum,
+          0,
+          `DSUBU ${resReg}, ${loadReg}, ${rhsReg}`,
+          "sub assign"
+        );
+      else if (mathOp === "*") {
+        this.emitInstruction(
+          "DMULTU",
+          0,
+          loadRegNum,
+          rhsRegNum,
+          0,
+          `DMULTU ${loadReg}, ${rhsReg}`,
+          "mult assign"
+        );
+        this.emitInstruction(
+          "MFLO",
+          resRegNum,
+          0,
+          0,
+          0,
+          `MFLO ${resReg}`,
+          "result"
+        );
+      } else if (mathOp === "/") {
+        this.emitInstruction(
+          "DDIVU",
+          0,
+          loadRegNum,
+          rhsRegNum,
+          0,
+          `DDIVU ${loadReg}, ${rhsReg}`,
+          "div assign"
+        );
+        this.emitInstruction(
+          "MFLO",
+          resRegNum,
+          0,
+          0,
+          0,
+          `MFLO ${resReg}`,
+          "result"
+        );
+      }
+
+      // 4. Store Back
+      if (sym.type === "char") {
+        this.emitInstruction(
+          "SB",
+          0,
+          resRegNum,
+          0,
+          0,
+          `SB ${resReg}, ${name}(R0)`,
+          `store result`
+        );
+      } else {
+        this.emitInstruction(
+          "SD",
+          0,
+          resRegNum,
+          0,
+          0,
+          `SD ${resReg}, ${name}(R0)`,
+          `store result`
+        );
+      }
+    }
+  }
+
+  parsePrint() {
+    this.resetTempRegs();
+    let cmd = this.tokens[this.pos++].value; // dsply or dsply@
+
+    if (this.match(TokenType.DELIMITER, "[")) {
+      // Check content
+      let t = this.peek();
+      if (t.type === TokenType.STRING_LITERAL) {
+        // String print - Silent in ASM
+        this.pos++;
+      } else {
+        if (cmd === "dsply")
+          throw new Error("Use 'dsply@' to print variables/expressions");
+
+        // Parse Expression
+        let reg = this.parseExpression();
+        // Silent in ASM for simple var, but complex expr generated instructions above
+      }
+      this.match(TokenType.DELIMITER, "]");
+    }
+    // Skip !! or !
+    while (
+      this.match(TokenType.DELIMITER, "!") ||
+      this.match(TokenType.DELIMITER, "!!")
+    );
+  }
+
+  // --- RECURSIVE DESCENT MATH PARSER ---
+  // Expression -> Term { + Term }
+  parseExpression() {
+    let leftReg = this.parseTerm();
+
+    while (this.pos < this.tokens.length) {
+      let t = this.peek();
+      if (t.value !== "+" && t.value !== "-") break;
+
+      let op = t.value;
+      this.pos++;
+
+      let rightReg = this.parseTerm();
+      let resReg = this.getTempReg();
+
+      let r1 = parseInt(leftReg.substring(1));
+      let r2 = parseInt(rightReg.substring(1));
+      let r3 = parseInt(resReg.substring(1));
+
+      if (op === "+") {
+        this.emitInstruction(
+          "DADDU",
+          r3,
+          r1,
+          r2,
+          0,
+          `DADDU ${resReg}, ${leftReg}, ${rightReg}`,
+          "add"
+        );
+      } else {
+        this.emitInstruction(
+          "DSUBU",
+          r3,
+          r1,
+          r2,
+          0,
+          `DSUBU ${resReg}, ${leftReg}, ${rightReg}`,
+          "sub"
+        );
+      }
+      leftReg = resReg;
+    }
+    return leftReg;
+  }
+
+  // Term -> Factor { * Factor }
+  parseTerm() {
+    let leftReg = this.parseFactor();
+
+    while (this.pos < this.tokens.length) {
+      let t = this.peek();
+      if (t.value !== "*" && t.value !== "/") break;
+
+      let op = t.value;
+      this.pos++;
+
+      let rightReg = this.parseFactor();
+      let resReg = this.getTempReg();
+
+      let r1 = parseInt(leftReg.substring(1));
+      let r2 = parseInt(rightReg.substring(1));
+      let r3 = parseInt(resReg.substring(1));
+
+      if (op === "*") {
+        this.emitInstruction(
+          "DMULTU",
+          0,
+          r1,
+          r2,
+          0,
+          `DMULTU ${leftReg}, ${rightReg}`,
+          "mult"
+        );
+        this.emitInstruction("MFLO", r3, 0, 0, 0, `MFLO ${resReg}`, "result");
+      } else {
+        this.emitInstruction(
+          "DDIVU",
+          0,
+          r1,
+          r2,
+          0,
+          `DDIVU ${leftReg}, ${rightReg}`,
+          "div"
+        );
+        this.emitInstruction("MFLO", r3, 0, 0, 0, `MFLO ${resReg}`, "result");
+      }
+      leftReg = resReg;
+    }
+    return leftReg;
+  }
+
+  // Factor -> Int | Var | (Expr)
+  parseFactor() {
+    let t = this.peek();
+    let reg = this.getTempReg();
+    let regNum = parseInt(reg.substring(1));
+
+    if (t.type === TokenType.INTEGER) {
+      let val = parseInt(t.value);
+      this.emitInstruction(
+        "DADDIU",
+        0,
+        0,
+        regNum,
+        val,
+        `DADDIU ${reg}, R0, #${val}`,
+        "load imm"
+      );
+      this.pos++;
+      return reg;
+    } else if (t.type === TokenType.CHAR_LITERAL) {
+      let val = t.value.charCodeAt(0);
+      this.emitInstruction(
+        "DADDIU",
+        0,
+        0,
+        regNum,
+        val,
+        `DADDIU ${reg}, R0, #${val}`,
+        "load char"
+      );
+      this.pos++;
+      return reg;
+    } else if (t.type === TokenType.VARIABLE) {
+      let sym = this.findSymbol(t.value);
+      if (!sym) throw new Error(`Undefined variable '${t.value}'`);
+
+      if (sym.type === "char") {
+        this.emitInstruction(
+          "LBU",
+          regNum,
+          0,
+          0,
+          0,
+          `LBU ${reg}, ${t.value}(R0)`,
+          "load var"
+        );
+      } else {
+        this.emitInstruction(
+          "LD",
+          regNum,
+          0,
+          0,
+          0,
+          `LD ${reg}, ${t.value}(R0)`,
+          "load var"
+        );
+      }
+      this.pos++;
+      return reg;
+    } else if (t.value === "(") {
+      this.pos++;
+      let r = this.parseExpression();
+      this.match(TokenType.DELIMITER, ")");
+      return r;
+    }
+    throw new Error(`Unexpected token '${t.value}'`);
+  }
 }
 
-// --- API ENDPOINT ---
+// =============================================================
+//  PART 4: EXPRESS API
+// =============================================================
 app.post("/compile", (req, res) => {
   const code = req.body.code;
   const tempFile = path.join(__dirname, "temp_code.txt");
 
-  let translations;
-
-  // 1. Try to Transpile (MIPS Gen)
+  // 1. Run JS Simulator (Generate ASM/Hex)
+  let mips = "",
+    binary = "";
   try {
-    translations = generateEduMIPS(code);
+    const simulator = new CompilerSimulator();
+    simulator.tokenize(code);
+    simulator.parse();
+    mips = simulator.dataSection + simulator.codeSection;
+    binary = simulator.binaryOutput;
   } catch (err) {
-    // --- FAIL FAST ---
-    // If ANY error occurs during transpilation, STOP immediately.
-    // Send back the error and EMPTY MIPS/Binary strings.
+    // FAIL FAST
     return res.json({
-      output: `Error: ${err.message}`,
+      output: `Transpiler Error: ${err.message}`,
       mips: "",
       binary: "",
     });
   }
 
-  // 2. Only if Transpilation Succeeded, Run Actual Interpreter
+  // 2. Run Real C Compiler (edoc)
   fs.writeFileSync(tempFile, code);
   exec(`${COMPILER_PATH} < ${tempFile}`, (error, stdout, stderr) => {
-    // Cleanup temp file
     if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
 
     let finalOutput = stdout;
-
-    if (stderr) {
-      finalOutput += `\n--- Errors ---\n${stderr}`;
-    }
-    if (error) {
-      finalOutput += `\n--- System Error ---\n${error.message}`;
-    }
+    if (stderr) finalOutput += `\n--- Errors ---\n${stderr}`;
+    if (error) finalOutput += `\n--- System Error ---\n${error.message}`;
 
     res.json({
-      output: finalOutput || "No Output (Check your code)",
-      mips: translations.mips,
-      binary: translations.binary,
+      output: finalOutput || "No Output",
+      mips: mips,
+      binary: binary,
     });
   });
 });
