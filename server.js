@@ -238,19 +238,16 @@ class CompilerSimulator {
         continue;
       }
 
-      // --- NUMBER PARSING WITH DECIMALS ---
       if (/[0-9]/.test(char)) {
         let start = i;
         while (i < length && /[0-9]/.test(source[i])) i++;
-
-        // Check if there is a dot followed by more digits (for decimals)
         if (
           source[i] === "." &&
           i + 1 < length &&
           /[0-9]/.test(source[i + 1])
         ) {
-          i++; // Consume dot
-          while (i < length && /[0-9]/.test(source[i])) i++; // Consume fraction
+          i++;
+          while (i < length && /[0-9]/.test(source[i])) i++;
         }
 
         let val = source.slice(start, i);
