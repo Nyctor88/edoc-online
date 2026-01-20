@@ -216,7 +216,7 @@ class CompilerSimulator {
 
       if (char === "'") {
         throw new Error(
-          `Line ${line}: Single quotes are not supported. Use double quotes (") for characters.`
+          `Line ${line}: Single quotes are not supported. Use double quotes (") for characters.`,
         );
       }
 
@@ -243,7 +243,7 @@ class CompilerSimulator {
         let start = i;
         while (i < length && /[0-9]/.test(source[i])) i++;
 
-        // Check if there is a dot followed by more digits (e.g., 3.14)
+        // Check if there is a dot followed by more digits (for decimals)
         if (
           source[i] === "." &&
           i + 1 < length &&
@@ -333,7 +333,7 @@ class CompilerSimulator {
           0,
           0,
           `SB ${reg}, ${name}(R0)`,
-          `init ${name}`
+          `init ${name}`,
         );
       } else {
         this.emitInstruction(
@@ -343,7 +343,7 @@ class CompilerSimulator {
           0,
           0,
           `SD ${reg}, ${name}(R0)`,
-          `init ${name}`
+          `init ${name}`,
         );
       }
     }
@@ -375,7 +375,7 @@ class CompilerSimulator {
           0,
           0,
           `SB ${reg}, ${name}(R0)`,
-          `assign ${name}`
+          `assign ${name}`,
         );
       } else {
         this.emitInstruction(
@@ -385,7 +385,7 @@ class CompilerSimulator {
           0,
           0,
           `SD ${reg}, ${name}(R0)`,
-          `assign ${name}`
+          `assign ${name}`,
         );
       }
     } else {
@@ -399,7 +399,7 @@ class CompilerSimulator {
           0,
           0,
           `LBU ${loadReg}, ${name}(R0)`,
-          `load for ${op}`
+          `load for ${op}`,
         );
       } else {
         this.emitInstruction(
@@ -409,7 +409,7 @@ class CompilerSimulator {
           0,
           0,
           `LD ${loadReg}, ${name}(R0)`,
-          `load for ${op}`
+          `load for ${op}`,
         );
       }
 
@@ -428,7 +428,7 @@ class CompilerSimulator {
           rhsRegNum,
           0,
           `DADDU ${resReg}, ${loadReg}, ${rhsReg}`,
-          "add assign"
+          "add assign",
         );
       else if (mathOp === "-")
         this.emitInstruction(
@@ -438,7 +438,7 @@ class CompilerSimulator {
           rhsRegNum,
           0,
           `DSUBU ${resReg}, ${loadReg}, ${rhsReg}`,
-          "sub assign"
+          "sub assign",
         );
       else if (mathOp === "*") {
         this.emitInstruction(
@@ -448,7 +448,7 @@ class CompilerSimulator {
           rhsRegNum,
           0,
           `DMULTU ${loadReg}, ${rhsReg}`,
-          "mult assign"
+          "mult assign",
         );
         this.emitInstruction(
           "MFLO",
@@ -457,7 +457,7 @@ class CompilerSimulator {
           0,
           0,
           `MFLO ${resReg}`,
-          "result"
+          "result",
         );
       } else if (mathOp === "/") {
         this.emitInstruction(
@@ -467,7 +467,7 @@ class CompilerSimulator {
           rhsRegNum,
           0,
           `DDIVU ${loadReg}, ${rhsReg}`,
-          "div assign"
+          "div assign",
         );
         this.emitInstruction(
           "MFLO",
@@ -476,7 +476,7 @@ class CompilerSimulator {
           0,
           0,
           `MFLO ${resReg}`,
-          "result"
+          "result",
         );
       }
 
@@ -488,7 +488,7 @@ class CompilerSimulator {
           0,
           0,
           `SB ${resReg}, ${name}(R0)`,
-          `store result`
+          `store result`,
         );
       } else {
         this.emitInstruction(
@@ -498,7 +498,7 @@ class CompilerSimulator {
           0,
           0,
           `SD ${resReg}, ${name}(R0)`,
-          `store result`
+          `store result`,
         );
       }
     }
@@ -564,7 +564,7 @@ class CompilerSimulator {
           r2,
           0,
           `DADDU ${resReg}, ${leftReg}, ${rightReg}`,
-          "add"
+          "add",
         );
       } else {
         this.emitInstruction(
@@ -574,7 +574,7 @@ class CompilerSimulator {
           r2,
           0,
           `DSUBU ${resReg}, ${leftReg}, ${rightReg}`,
-          "sub"
+          "sub",
         );
       }
       leftReg = resReg;
@@ -607,7 +607,7 @@ class CompilerSimulator {
           r2,
           0,
           `DMULTU ${leftReg}, ${rightReg}`,
-          "mult"
+          "mult",
         );
         this.emitInstruction("MFLO", r3, 0, 0, 0, `MFLO ${resReg}`, "result");
       } else {
@@ -618,7 +618,7 @@ class CompilerSimulator {
           r2,
           0,
           `DDIVU ${leftReg}, ${rightReg}`,
-          "div"
+          "div",
         );
         this.emitInstruction("MFLO", r3, 0, 0, 0, `MFLO ${resReg}`, "result");
       }
@@ -643,7 +643,7 @@ class CompilerSimulator {
         regNum,
         val,
         `DADDIU ${reg}, R0, #${val}`,
-        "load imm"
+        "load imm",
       );
       this.pos++;
       return reg;
@@ -656,7 +656,7 @@ class CompilerSimulator {
         regNum,
         val,
         `DADDIU ${reg}, R0, #${val}`,
-        "load char"
+        "load char",
       );
       this.pos++;
       return reg;
@@ -672,7 +672,7 @@ class CompilerSimulator {
           0,
           0,
           `LBU ${reg}, ${t.value}(R0)`,
-          "load var"
+          "load var",
         );
       } else {
         this.emitInstruction(
@@ -682,7 +682,7 @@ class CompilerSimulator {
           0,
           0,
           `LD ${reg}, ${t.value}(R0)`,
-          "load var"
+          "load var",
         );
       }
       this.pos++;
@@ -694,7 +694,24 @@ class CompilerSimulator {
         this.error("Missing closing parenthesis ')'");
       }
       return r;
+    } else if (t.value === "-") {
+      this.pos++; // Consume the minus sign
+      let rightReg = this.parseFactor(); // Recursively parse the value to negate
+      let rightRegNum = parseInt(rightReg.substring(1));
+
+      // Emit subtraction from 0: R_res = R0 - R_right
+      this.emitInstruction(
+        "DSUBU",
+        regNum, // rd (Result)
+        0, // rs (R0)
+        rightRegNum, // rt (Operand)
+        0, // imm
+        `DSUBU ${reg}, R0, ${rightReg}`,
+        "unary minus",
+      );
+      return reg;
     }
+
     this.error(`Unexpected token '${t.value}'`);
   }
 }
